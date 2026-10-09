@@ -141,6 +141,9 @@ public final class CaptureSender {
             }
             while (keepRunning.getAsBoolean()) {
                 int read = recorder.read(pcm, 0, pcm.length, AudioRecord.READ_NON_BLOCKING);
+                if (read == AudioRecord.ERROR_DEAD_OBJECT) {
+                    throw new CaptureRestartException();
+                }
                 if (read < 0 || read % 4 != 0) {
                     throw new IllegalStateException("Invalid AudioRecord read: " + read);
                 }

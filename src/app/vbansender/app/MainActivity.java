@@ -152,33 +152,6 @@ public final class MainActivity extends Activity {
             }
         }
         render();
-        if (prefs.getBoolean("enabled", false)
-                && "ON".equals(prefs.getString("controller_state", ""))) {
-            final String run = prefs.getString("active_run", "");
-            new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    String result;
-                    try {
-                        result = new EngineBackend(MainActivity.this).describe();
-                    } catch (Exception error) {
-                        result = "Cannot read engine status: " + error.getMessage();
-                    }
-                    final String text = result;
-                    runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (!isFinishing() && prefs.getBoolean("enabled", false)
-                                    && run.equals(prefs.getString("active_run", ""))
-                                    && "ON".equals(prefs.getString("controller_state", ""))
-                                    && prefs.getString("last_error", "").isEmpty()) {
-                                status.setText(text);
-                            }
-                        }
-                    });
-                }
-            }, "vban-visible-status").start();
-        }
     }
 
     @Override

@@ -54,7 +54,10 @@ setting. Receiver settings become editable after OFF is confirmed.
 
 ## Troubleshooting
 
-After an error, switch OFF → ON. Changing audio routes can interrupt playback;
+Temporary detector timeouts and invalidated audio recorders recover automatically.
+Other engine errors appear on the screen and notification after the next status check
+(every 15 seconds while the service runs). After an error, switch OFF → ON.
+Changing audio routes can interrupt playback;
 Prime or Netflix may require restarting the content.
 Before updating, uninstalling, or force-stopping the app, select OFF:
 Force Stop can leave the detached shell engine running.

@@ -36,6 +36,8 @@ final class AppAwareController {
             }
         };
         String state = null;
+        int captureFailures = 0;
+        long lastCaptureFailure = 0;
         while (enabled.getAsBoolean()) {
             watcher.checkFailure();
             if (keepRunning.getAsBoolean()) {
@@ -43,7 +45,22 @@ final class AppAwareController {
                     status.update("STARTING_CAPTURE");
                     state = "STARTING_CAPTURE";
                 }
-                capture.run(keepRunning);
+                try {
+                    capture.run(keepRunning);
+                    captureFailures = 0;
+                } catch (CaptureRestartException unavailable) {
+                    long now = System.nanoTime();
+                    if (now - lastCaptureFailure > 10000000000L) captureFailures = 0;
+                    lastCaptureFailure = now;
+                    if (++captureFailures > 3) throw unavailable;
+                    status.update("IDLE");
+                    state = "IDLE";
+                    System.err.println("CAPTURE_WAIT: " + unavailable.getMessage());
+                    long retryAt = System.nanoTime() + 1000000000L;
+                    while (keepRunning.getAsBoolean() && System.nanoTime() < retryAt) {
+                        Thread.sleep(20);
+                    }
+                }
                 if (enabled.getAsBoolean() && !"IDLE".equals(state)) {
                     status.update("IDLE");
                     state = "IDLE";

@@ -10,6 +10,7 @@ public final class AudioController implements AutoCloseable {
     public interface Backend {
         void start(BooleanSupplier stillEnabled) throws Exception;
         void stop() throws Exception;
+        void check() throws Exception;
     }
 
     public interface Listener {
@@ -26,6 +27,8 @@ public final class AudioController implements AutoCloseable {
 
     // Request and state fields are guarded by lock. Backend calls run on one worker only.
     private boolean desired;
+    private boolean checkRequested;
+    private boolean healthFailed;
     private boolean closed;
     private boolean workerScheduled;
     private boolean engineMayBeActive;
@@ -60,9 +63,19 @@ public final class AudioController implements AutoCloseable {
             }
             requestVersion++;
             desired = enabled;
+            checkRequested = enabled && state == State.ON;
             if (!enabled) {
                 offFence++;
             }
+            scheduleIfNeededLocked();
+        }
+    }
+
+    /** Checks the detached engine on the same worker as Start and Stop. */
+    public void check() {
+        synchronized (lock) {
+            if (closed || !desired || state != State.ON) return;
+            checkRequested = true;
             scheduleIfNeededLocked();
         }
     }
@@ -101,6 +114,7 @@ public final class AudioController implements AutoCloseable {
 
     private boolean needsWorkLocked() {
         if (desired) {
+            if (engineMayBeActive && state == State.ON && checkRequested) return true;
             return !engineMayBeActive && (!backendStateKnown || state != State.ON)
                     && requestVersion > failedStartVersion;
         }
@@ -126,6 +140,8 @@ public final class AudioController implements AutoCloseable {
         while (true) {
             boolean target;
             boolean alreadyOff = false;
+            boolean checking = false;
+            long checkedVersion = 0;
             long startFence = 0;
             long stopVersion = 0;
             synchronized (lock) {
@@ -134,12 +150,16 @@ public final class AudioController implements AutoCloseable {
                 }
                 target = desired;
                 if (target) {
-                    if (engineMayBeActive || !mayStart
-                            || requestVersion <= failedStartVersion) {
-                        return;
+                    if (engineMayBeActive) {
+                        if (state != State.ON || !checkRequested) return;
+                        checkRequested = false;
+                        checking = true;
+                        checkedVersion = requestVersion;
+                    } else {
+                        if (!mayStart || requestVersion <= failedStartVersion) return;
+                        startFence = offFence;
+                        engineMayBeActive = true;
                     }
-                    startFence = offFence;
-                    engineMayBeActive = true;
                 } else if (engineMayBeActive || !backendStateKnown) {
                     if (requestVersion <= failedStopVersion) {
                         return;
@@ -150,6 +170,10 @@ public final class AudioController implements AutoCloseable {
                 }
             }
 
+            if (checking) {
+                checkBackend(checkedVersion);
+                continue;
+            }
             if (alreadyOff) {
                 transition(State.OFF);
                 return;
@@ -163,6 +187,22 @@ public final class AudioController implements AutoCloseable {
                 }
             } else if (!stopEngine(stopVersion)) {
                 return;
+            }
+        }
+    }
+
+    private void checkBackend(long version) {
+        Exception failure = null;
+        try { backend.check(); } catch (Exception error) { failure = error; }
+        synchronized (lock) {
+            if (closed || !desired || requestVersion != version) return;
+            if (failure != null) {
+                healthFailed = true;
+                notifyError(failure);
+            } else if (healthFailed) {
+                healthFailed = false;
+                try { listener.onState(State.ON); }
+                catch (RuntimeException error) { notifyError(error); }
             }
         }
     }
@@ -254,6 +294,7 @@ public final class AudioController implements AutoCloseable {
             }
             changed = state != State.ON;
             state = State.ON;
+            healthFailed = false;
             backendStateKnown = true;
         }
         if (changed) {

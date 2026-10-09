@@ -179,18 +179,18 @@ final class EngineBackend implements AudioController.Backend {
         AppConfig.save(prefs.edit().remove("active_run").remove("original_surround"));
     }
 
-    String describe() throws Exception {
+    @Override
+    public void check() throws Exception {
         EngineState state = read();
         String run = prefs.getString("active_run", "");
         if (state == null || !state.run.equals(run)) {
-            return "Engine is not running. Turn OFF, then ON to retry.";
+            throw new IllegalStateException("Engine stopped. Turn OFF, then ON to retry.");
         }
-        if ("ERROR".equals(state.state)) {
-            return "Error: " + state.message;
+        if ("ERROR".equals(state.state) || "STOPPED".equals(state.state)) {
+            throw new IllegalStateException("Engine " + state.state + ": " + state.message);
         }
         if (!alive(state)) {
-            return "Engine stopped. Turn OFF, then ON to retry.";
+            throw new IllegalStateException("Engine stopped. Turn OFF, then ON to retry.");
         }
-        return "Audio via VBAN";
     }
 }
