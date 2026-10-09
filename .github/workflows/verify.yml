@@ -38,3 +38,29 @@ jobs:
             build/vban-dev.apk.sha256
           if-no-files-found: error
           retention-days: 7
+      - name: Sign normal APK with the retained release key
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+        run: |
+          set -eu
+          : "${RELEASE_KEYSTORE_BASE64:?Missing release keystore secret}"
+          : "${RELEASE_KEYSTORE_PASSWORD:?Missing release password secret}"
+          umask 077
+          signing_dir=$(mktemp -d "$RUNNER_TEMP/vban-signing.XXXXXX")
+          trap 'rm -rf -- "$signing_dir"' EXIT
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$signing_dir/release.p12"
+          printf '%s\n' "$RELEASE_KEYSTORE_PASSWORD" > "$signing_dir/password.txt"
+          unset RELEASE_KEYSTORE_BASE64 RELEASE_KEYSTORE_PASSWORD
+          sh tools/sign-release.sh "$signing_dir/release.p12" "$signing_dir/password.txt"
+      - name: Keep release-signed APK
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: vban-release-build
+          path: |
+            build/vban-release.apk
+            build/vban-release.apk.sha256
+          if-no-files-found: error
+          retention-days: 7
