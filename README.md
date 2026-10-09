@@ -26,7 +26,9 @@ sh tools/build.sh
 
 Outputs: `build/vban.apk`, `build/vban-dev.apk`, `build/vban-engine.jar`,
 SHA-256 files, and test reports in `build/e2e/`. Use `vban.apk` for normal use.
-CI APKs are test builds with a new signing key per run; see
+On GitHub, use `vban-release.apk` from the `vban-release-build` artifact of a
+successful `main` build. These APKs share a retained signing key. The separate
+`vban-test-build` artifacts use temporary test keys; see
 [signing and updates](docs/development.md#build-and-artifacts).
 
 ## License

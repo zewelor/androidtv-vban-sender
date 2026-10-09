@@ -13,11 +13,34 @@ Select OFF before switching variants.
 The local test signing key is generated in `build/signing/proof.p12`.
 Keep it for updates to your own installation; it is not a production release key.
 Each fresh CI job generates a different signing key. Its APKs are test artifacts,
-not a stable update channel. Public APK releases need a separately retained signing
-key; changing the signing identity requires reinstalling and reauthorizing the app.
+stored as `vban-test-build`. Pushes and manual builds on `main` additionally produce
+`vban-release-build/vban-release.apk` with the retained release key. Pull requests
+and other branches do not receive release secrets. The developer APK stays test-signed.
+Changing from a test signature to the release signature requires one reinstall and
+reauthorization. Later release builds preserve app data when installed as updates.
+Increase `versionCode` and `versionName` in the manifest for each published version.
 The app generates its ADB key in private app storage, independently of desktop ADB.
 CI uploads only APK/JAR, checksums, and synthetic test results. Device diagnostics,
 ADB keys, and signing keys remain outside published artifacts.
+
+### Release signing
+
+Generate one private PKCS12 keystore with alias `release`, a strong password, and
+at least 25 years of certificate validity. Keep the keystore and password in a
+private backup outside this repository. Never regenerate the key for later releases.
+Set repository Actions secrets `RELEASE_KEYSTORE_BASE64` (base64 of the keystore)
+and `RELEASE_KEYSTORE_PASSWORD` (its password). The workflow reconstructs them in
+a temporary directory and removes it after signing; neither file is uploaded.
+The release certificate is identified by its public SHA-256 fingerprint in CI logs.
+
+To sign locally after a successful build:
+
+```sh
+sh tools/sign-release.sh /private/path/release.p12 /private/path/password.txt
+```
+
+This produces `build/vban-release.apk` and its checksum. Actions artifacts expire
+after seven days; release signing does not publish a GitHub Release or add an app updater.
 
 ## Runtime
 
