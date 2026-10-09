@@ -8,6 +8,7 @@ import android.os.Process;
 
 import java.io.File;
 import java.io.RandomAccessFile;
+import java.net.PortUnreachableException;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
 import java.nio.channels.FileLock;
@@ -187,7 +188,13 @@ public final class CaptureSender {
             }
             ByteBuffer packet = encoder.encode(pcm, offset, count, counter++);
             int size = packet.remaining();
-            int written = channel.write(packet);
+            int written;
+            try {
+                written = channel.write(packet);
+            } catch (PortUnreachableException unavailable) {
+                // A temporary receiver outage loses this packet, not the capture session.
+                written = 0;
+            }
             if (written != size && written != 0) {
                 throw new IllegalStateException("Partial UDP datagram");
             }
