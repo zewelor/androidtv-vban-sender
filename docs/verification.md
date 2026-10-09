@@ -28,8 +28,12 @@ system failures.
 Version 0.8 adds regression coverage for delayed toggle delivery, OFF during health
 checks, service replacement, and failed cleanup. The full local build passed;
 service lifecycle adapters and scripted shell failures exercise production logic,
-but do not prove Android process-death or lifecycle timing. Device validation of
-this version has not been completed.
+but do not prove Android process-death or lifecycle timing. The signed update
+preserved receiver settings and local ADB authorization on the tested device.
+OFF restored the original audio setting; rapid OFF → ON replaced the engine with
+one new process and resumed SmartTube sending. A receiver capture confirmed 30
+UDP packets with no capture drops. Physical listening and another standby cycle
+were not checked in this update.
 
 The daily app's boot/recovery paths, overnight standby, long playback sessions,
 A/V synchronization, and seamless rapid app changes still need broader validation.
