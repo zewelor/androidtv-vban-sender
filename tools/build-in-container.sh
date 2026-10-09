@@ -23,6 +23,8 @@ jar --create --file build/vban-engine.jar -C build/dex classes.dex \
     -C build/proof/assets licenses
 python3 tests/e2e.py
 python3 tests/app-aware-e2e.py
+python3 tests/service-e2e.py
+python3 tests/backend-e2e.py
 python3 tests/adb-e2e.py
 python3 tests/pacing-e2e.py
 python3 tests/boot-probe-e2e.py

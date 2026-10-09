@@ -60,10 +60,7 @@ public final class MainActivity extends Activity {
             public void onClick(View view) {
                 try {
                     boolean enabled = !prefs.getBoolean("enabled", false);
-                    AppConfig.save(prefs.edit().putBoolean("enabled", enabled)
-                            .putString("controller_state", enabled ? "STARTING" : "STOPPING")
-                            .remove("last_error"));
-                    startForegroundService(new Intent(MainActivity.this, VbanService.class));
+                    VbanService.setEnabled(MainActivity.this, enabled);
                 } catch (Exception error) {
                     AppConfig.save(prefs.edit().putString("last_error", error.toString()));
                 }

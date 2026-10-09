@@ -75,8 +75,28 @@ Persistent recorder failures and other capture errors remain fatal. See the
 The service checks engine status every 15 seconds on the Start/Stop worker and
 when the app is reopened. Checks report failures without restarting a failed engine;
 a successful check clears a temporary status-read error.
+The UI saves the requested choice; controller callbacks publish progress and errors.
+Toggle intents carry their own ON/OFF value so delayed dispatch cannot lose an OFF
+cancellation fence. Service shutdown requires current confirmed cleanup and an
+accepted `stopSelfResult`, rather than an earlier OFF callback.
+Every delivered OFF leaves a cleanup obligation before the next ON, including
+during health checks and service replacement. Complete backend jobs share one
+process-wide worker; closing a controller preserves pending cleanup, and destroyed
+services stop publishing progress and errors.
+The backend persists incomplete cleanup before touching the engine. Replacement
+backends cannot adopt it until OFF has restored audio settings and cleared ownership.
 
 ## Diagnostics and tests
+
+`tests/service-e2e.py` executes the service, controller, and toggle dispatch with
+controlled Android lifecycle adapters. It covers delayed commands, failed cleanup
+visibility, stale OFF callbacks, and rejected shutdown.
+It also covers OFF → ON during a health check and service replacement during
+Start or pending OFF cleanup. Reports are under
+`build/e2e/service/`; the adapters do not establish Android lifecycle behavior.
+`tests/backend-e2e.py` runs the actual backend with scripted transport failures and
+settings readback, covering persisted cleanup and restoration. Its report is under
+`build/e2e/backend/`.
 
 Use your exact ADB device address and existing receiver configuration:
 

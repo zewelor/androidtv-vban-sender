@@ -61,6 +61,9 @@ final class EngineBackend implements AudioController.Backend {
 
     @Override
     public void start(BooleanSupplier stillEnabled) throws Exception {
+        if (prefs.getBoolean("cleanup_pending", false)) {
+            throw new IllegalStateException("Previous cleanup is incomplete. Turn OFF, then ON to retry.");
+        }
         OutputConfig config = AppConfig.read(context);
         if (!stillEnabled.getAsBoolean()) {
             throw new CancellationException("Start cancelled");
@@ -149,6 +152,8 @@ final class EngineBackend implements AudioController.Backend {
 
     @Override
     public void stop() throws Exception {
+        // Survives service/process replacement if transport fails before marker deletion.
+        AppConfig.save(prefs.edit().putBoolean("cleanup_pending", true));
         String run = prefs.getString("active_run", "");
         if (!run.isEmpty()) {
             // Delete the per-run fence before checking state: a delayed child
@@ -176,7 +181,7 @@ final class EngineBackend implements AudioController.Backend {
                 throw new IllegalStateException("Could not restore standard audio settings");
             }
         }
-        AppConfig.save(prefs.edit().remove("active_run").remove("original_surround"));
+        AppConfig.save(prefs.edit().remove("active_run").remove("original_surround").remove("cleanup_pending"));
     }
 
     @Override
