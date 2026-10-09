@@ -25,6 +25,12 @@ authorization. A controlled engine exit appeared as an error in the app after ab
 and recorder recovery are covered by synthetic fault tests, not injected Android
 system failures.
 
+Version 0.8 adds regression coverage for delayed toggle delivery, OFF during health
+checks, service replacement, and failed cleanup. The full local build passed;
+service lifecycle adapters and scripted shell failures exercise production logic,
+but do not prove Android process-death or lifecycle timing. Device validation of
+this version has not been completed.
+
 The daily app's boot/recovery paths, overnight standby, long playback sessions,
 A/V synchronization, and seamless rapid app changes still need broader validation.
 Receiver packet delivery and physical listening are separate checks.

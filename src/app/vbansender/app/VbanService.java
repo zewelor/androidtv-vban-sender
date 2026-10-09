@@ -6,6 +6,7 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
+import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.IBinder;
@@ -15,9 +16,11 @@ import java.util.concurrent.CancellationException;
 
 /** Owns serialized user requests; checks run on the same worker as Start and Stop. */
 public final class VbanService extends Service {
+    private static final String EXTRA_ENABLED = "enabled";
     private AudioController controller;
     private final Handler main = new Handler(Looper.getMainLooper());
     private int latestStart;
+    private volatile boolean destroyed;
     private final Runnable healthCheck = new Runnable() {
         @Override
         public void run() {
@@ -25,6 +28,13 @@ public final class VbanService extends Service {
             main.postDelayed(this, 15000);
         }
     };
+
+    /** Saves the user's choice without guessing the controller's progress or clearing errors. */
+    static void setEnabled(Context context, boolean enabled) {
+        AppConfig.save(AppConfig.prefs(context).edit().putBoolean("enabled", enabled));
+        context.startForegroundService(new Intent(context, VbanService.class)
+                .putExtra(EXTRA_ENABLED, enabled));
+    }
 
     @Override
     public void onCreate() {
@@ -36,6 +46,7 @@ public final class VbanService extends Service {
         controller = new AudioController(new EngineBackend(this), new AudioController.Listener() {
             @Override
             public void onState(final AudioController.State state) {
+                if (destroyed) return;
                 Log.i("VBAN", "Controller " + state);
                 SharedPreferences prefs = AppConfig.prefs(VbanService.this);
                 SharedPreferences.Editor update = prefs.edit().putString("controller_state", state.name());
@@ -47,24 +58,14 @@ public final class VbanService extends Service {
                 main.post(new Runnable() {
                     @Override
                     public void run() {
-                        boolean failed = !AppConfig.prefs(VbanService.this)
-                                .getString("last_error", "").isEmpty();
-                        getSystemService(NotificationManager.class).notify(2,
-                                notification(failed ? "Error — open VBAN for details"
-                                        : state == AudioController.State.ON
-                                        ? "Automatic audio routing enabled" : state.toString()));
-                        if (state == AudioController.State.OFF
-                                && !AppConfig.prefs(VbanService.this).getBoolean("enabled", false)) {
-                            stopForeground(STOP_FOREGROUND_REMOVE);
-                            stopSelfResult(latestStart);
-                        }
+                        publishCurrentState();
                     }
                 });
             }
 
             @Override
             public void onError(Exception error) {
-                if (error instanceof CancellationException) {
+                if (destroyed || error instanceof CancellationException) {
                     return;
                 }
                 Log.e("VBAN", "Audio control failed", error);
@@ -73,13 +74,30 @@ public final class VbanService extends Service {
                 main.post(new Runnable() {
                     @Override
                     public void run() {
-                        getSystemService(NotificationManager.class).notify(2,
-                                notification("Error — open VBAN for details"));
+                        publishCurrentState();
                     }
                 });
             }
         });
         main.postDelayed(healthCheck, 15000);
+    }
+
+    /** Main-thread callbacks use current cleanup proof, never a historical OFF event. */
+    private void publishCurrentState() {
+        if (destroyed) return;
+        SharedPreferences prefs = AppConfig.prefs(this);
+        boolean off = !prefs.getBoolean("enabled", false) && controller.isOff();
+        if (off && prefs.contains("last_error")) {
+            AppConfig.save(prefs.edit().remove("last_error"));
+        }
+        String state = prefs.getString("controller_state", "OFF");
+        boolean failed = !prefs.getString("last_error", "").isEmpty();
+        getSystemService(NotificationManager.class).notify(2,
+                notification(failed ? "Error — open VBAN for details"
+                        : "ON".equals(state) ? "Automatic audio routing enabled" : state));
+        if (off && stopSelfResult(latestStart)) {
+            stopForeground(STOP_FOREGROUND_REMOVE);
+        }
     }
 
     private Notification notification(String text) {
@@ -94,13 +112,18 @@ public final class VbanService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         latestStart = startId;
-        controller.request(AppConfig.prefs(this).getBoolean("enabled", false));
+        boolean enabled = intent != null && intent.hasExtra(EXTRA_ENABLED)
+                ? intent.getBooleanExtra(EXTRA_ENABLED, false)
+                : AppConfig.prefs(this).getBoolean("enabled", false);
+        controller.request(enabled);
+        publishCurrentState();
         return START_NOT_STICKY;
     }
 
     @Override
     public void onDestroy() {
-        main.removeCallbacks(healthCheck);
+        destroyed = true;
+        main.removeCallbacksAndMessages(null);
         controller.close();
         super.onDestroy();
     }

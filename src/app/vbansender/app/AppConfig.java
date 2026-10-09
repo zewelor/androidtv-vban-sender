@@ -31,6 +31,7 @@ final class AppConfig {
     static boolean needsReconcile(Context context) {
         SharedPreferences prefs = prefs(context);
         return prefs.getBoolean("enabled", false)
+                || prefs.getBoolean("cleanup_pending", false)
                 || !prefs.getString("active_run", "").isEmpty()
                 || prefs.contains("original_surround")
                 || "STOPPING".equals(prefs.getString("controller_state", "OFF"));

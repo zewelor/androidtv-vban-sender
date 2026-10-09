@@ -105,7 +105,8 @@ public final class SettingsActivity extends Activity {
         return !prefs.getBoolean("enabled", false)
                 && "OFF".equals(prefs.getString("controller_state", "OFF"))
                 && prefs.getString("active_run", "").isEmpty()
-                && !prefs.contains("original_surround");
+                && !prefs.contains("original_surround")
+                && !prefs.getBoolean("cleanup_pending", false);
     }
 
     @Override
