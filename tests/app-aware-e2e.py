@@ -37,6 +37,8 @@ class Trial:
         if continuous and marker:
             self.marker.touch()
         self.foreground.write_text(initial)
+        self.capture_fault = self.directory / "capture.txt"
+        self.capture_fault.write_text("OK")
         self.receiver = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.receiver.bind(("127.0.0.1", 0))
         self.receiver.settimeout(.02)
@@ -46,6 +48,7 @@ class Trial:
         self.stderr_path = self.directory / "stderr.log"
         self.stderr = self.stderr_path.open("w")
         env = dict(os.environ, VBAN_SENDER_TEST_FOREGROUND=str(self.foreground),
+                   VBAN_SENDER_TEST_CAPTURE=str(self.capture_fault),
                    PATH=str(OUTPUT / "bin") + os.pathsep + os.environ["PATH"])
         command = [str(self.receiver.getsockname()[1]), "continuous", str(self.marker),
                    str(self.stop)] if continuous else [str(self.receiver.getsockname()[1]),
@@ -151,6 +154,76 @@ def transitions():
         trial.close()
 
 
+def capture_recovers():
+    trial = Trial("capture-recovers", dump(YOUTUBE), continuous=True)
+    try:
+        trial.wait("SESSION_STARTED")
+        trial.capture_fault.write_text("DEAD")
+        released = trial.wait("SESSION_RELEASED")
+        trial.quiet(.3)
+        assert trial.process.poll() is None, "dead recorder killed the engine"
+        trial.capture_fault.write_text("OK")
+        restarted = trial.wait("SESSION_STARTED", released, timeout=4)
+        trial.capture_fault.write_text("DEAD")
+        trial.wait("SESSION_RELEASED", restarted)
+        changed = trial.change(dump(NETFLIX))
+        trial.capture_fault.write_text("OK")
+        trial.quiet(1.3)
+        changed = trial.change(dump(YOUTUBE))
+        trial.wait("SESSION_STARTED", changed, timeout=4)
+        trial.capture_fault.write_text("ERROR")
+        trial.wait("SESSION_RELEASED", changed)
+        return trial.finish(expected=1)
+    finally:
+        trial.close()
+
+
+def persistent_capture_failure():
+    trial = Trial("persistent-capture-failure", dump(YOUTUBE), continuous=True)
+    try:
+        trial.wait("SESSION_STARTED")
+        trial.capture_fault.write_text("DEAD")
+        trial.wait("SESSION_RELEASED")
+        report = trial.finish(expected=1)
+        assert sum(e["event"] == "SESSION_STARTED" for e in trial.events) == 4
+        assert "AudioRecord became invalid" in trial.stderr_path.read_text()
+        return report
+    finally:
+        trial.close()
+
+
+def stop_during_capture_recovery():
+    trial = Trial("stop-during-capture-recovery", dump(YOUTUBE), continuous=True)
+    try:
+        trial.wait("SESSION_STARTED")
+        trial.capture_fault.write_text("DEAD")
+        trial.wait("SESSION_RELEASED")
+        trial.stop.touch()
+        report = trial.finish()
+        assert sum(e["event"] == "SESSION_STARTED" for e in trial.events) == 1
+        return report
+    finally:
+        trial.close()
+
+
+def detector_recovers():
+    trial = Trial("detector-recovers", dump(YOUTUBE), continuous=True)
+    try:
+        trial.wait("SESSION_STARTED")
+        changed = trial.change("TIMEOUT")
+        trial.wait("SESSION_RELEASED", changed)
+        trial.quiet(.7)
+        assert trial.process.poll() is None, "transient dump timeout killed the engine"
+        changed = trial.change(dump(NETFLIX))
+        trial.quiet(1.5)
+        changed = trial.change(dump(YOUTUBE))
+        trial.wait("SESSION_STARTED", changed, timeout=4)
+        trial.stop.touch()
+        return trial.finish()
+    finally:
+        trial.close()
+
+
 def failure():
     trial = Trial("detector-failure", dump(YOUTUBE))
     try:
@@ -252,8 +325,11 @@ def main():
 import os,pathlib,sys,time
 text=pathlib.Path(os.environ['VBAN_SENDER_TEST_FOREGROUND']).read_text()
 if text=='ERROR':
-    print('fixture detector failure',file=sys.stderr)
+    print('Permission Denial: fixture detector failure',file=sys.stderr)
     sys.exit(7)
+if text=='TIMEOUT':
+    print('DUMP TIMEOUT')
+    sys.exit(0)
 if text=='STALL':
     time.sleep(3)
     text=pathlib.Path(os.environ['VBAN_SENDER_TEST_FOREGROUND']).read_text()
@@ -271,6 +347,10 @@ print(text)
                "canceled_before_start": canceled_before_start(),
                "marker_stops_sending": marker_stops_sending(),
                "marker_stops_idle": marker_stops_idle(), "detector_failure": failure(),
+               "detector_recovers": detector_recovers(),
+               "capture_recovers": capture_recovers(),
+               "persistent_capture_failure": persistent_capture_failure(),
+               "stop_during_capture_recovery": stop_during_capture_recovery(),
                "stale_and_stop": stale(), "finite_deadline": deadline()}
     report = {"result": "PASS", "scope": "Real observer/controller, synthetic dumpsys and UDP backend; no Android audio proof",
               "scenarios": results}

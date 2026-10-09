@@ -52,14 +52,20 @@ final class ForegroundWatcher implements AutoCloseable {
                         }
                     }
                     int code = current.waitFor();
-                    if (code != 0) {
-                        throw new IOException("dumpsys failed with exit " + code + ": "
-                                + new String(output.toByteArray(), StandardCharsets.UTF_8));
-                    }
                     dump = new String(output.toByteArray(), StandardCharsets.UTF_8);
-                    if (dump.contains("DUMP TIMEOUT") || dump.contains("Permission Denial")
+                    if (dump.contains("DUMP TIMEOUT") && !dump.contains("Permission Denial")) {
+                        // Release capture immediately; a busy activity service can recover.
+                        policy.observe(null, System.nanoTime());
+                        if (!"timeout".equals(previous)) {
+                            System.err.println("DETECTION_WAIT: dumpsys timed out; retrying");
+                            previous = "timeout";
+                        }
+                        Thread.sleep(250);
+                        continue;
+                    }
+                    if (code != 0 || dump.contains("Permission Denial")
                             || dump.contains("Can't find service")) {
-                        throw new IOException("Invalid foreground dump: " + dump);
+                        throw new IOException("Invalid foreground dump (exit " + code + "): " + dump);
                     }
                 } finally {
                     current.destroy();

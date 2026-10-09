@@ -19,6 +19,12 @@ and run after physical wake. UDP reception and audible SmartTube playback return
 without toggling VBAN or restarting the app. A signed update also preserved settings
 and local ADB authorization.
 
+Version 0.7 was updated with the same signing key and preserved settings and ADB
+authorization. A controlled engine exit appeared as an error in the app after about
+13 seconds. OFF → ON restored sending, confirmed by receiver packets. Detector
+and recorder recovery are covered by synthetic fault tests, not injected Android
+system failures.
+
 The daily app's boot/recovery paths, overnight standby, long playback sessions,
 A/V synchronization, and seamless rapid app changes still need broader validation.
 Receiver packet delivery and physical listening are separate checks.

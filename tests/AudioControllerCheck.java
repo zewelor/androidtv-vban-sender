@@ -13,6 +13,8 @@ public final class AudioControllerCheck {
     private static final long WAIT_SECONDS = 5;
 
     public static void main(String[] args) throws Exception {
+        runningBackendIsCheckedAndFailuresBecomeVisible();
+        offDiscardsAnInFlightHealthError();
         firstOffStopsAnUnknownPreexistingBackend();
         failedInitialOffNeedsAnExplicitRetry();
         firstOnAdoptsAnUnknownPreexistingBackend();
@@ -21,6 +23,54 @@ public final class AudioControllerCheck {
         failedStopBlocksRestartUntilCleanupSucceeds();
         closeDoesNotPretendTheEngineStopped();
         System.out.println("AUDIO_CONTROLLER_PASS");
+    }
+
+    private static void runningBackendIsCheckedAndFailuresBecomeVisible() throws Exception {
+        AtomicInteger starts = new AtomicInteger();
+        AtomicInteger checks = new AtomicInteger();
+        StateListener listener = new StateListener();
+        AudioController controller = new AudioController(new AudioController.Backend() {
+            public void start(java.util.function.BooleanSupplier enabled) { starts.incrementAndGet(); }
+            public void stop() { }
+            public void check() throws Exception {
+                if (checks.incrementAndGet() == 1) throw new Exception("Engine stopped");
+            }
+        }, listener);
+        try {
+            controller.request(true);
+            listener.awaitState(AudioController.State.ON);
+            controller.request(true);
+            await(listener.firstError, "repeated ON did not detect a stopped engine");
+            controller.request(true);
+            listener.awaitStateCount(AudioController.State.ON, 2);
+            require(starts.get() == 1 && checks.get() == 2,
+                    "health checks must report recovery without creating duplicate engines");
+        } finally { controller.close(); }
+    }
+
+    private static void offDiscardsAnInFlightHealthError() throws Exception {
+        CountDownLatch checking = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        StateListener listener = new StateListener();
+        AudioController controller = new AudioController(new AudioController.Backend() {
+            public void start(java.util.function.BooleanSupplier enabled) { }
+            public void stop() { }
+            public void check() throws Exception {
+                checking.countDown();
+                await(release, "health check was not released");
+                throw new Exception("Stale error");
+            }
+        }, listener);
+        try {
+            controller.request(true);
+            listener.awaitState(AudioController.State.ON);
+            controller.check();
+            await(checking, "periodic health check did not start");
+            controller.request(false);
+            release.countDown();
+            listener.awaitState(AudioController.State.OFF);
+            require(listener.errors.isEmpty(), "completed OFF must discard an obsolete health error");
+        } finally { release.countDown(); controller.close(); }
     }
 
     private static void firstOffStopsAnUnknownPreexistingBackend() throws Exception {
@@ -254,6 +304,8 @@ public final class AudioControllerCheck {
     }
 
     private static final class RaceBackend implements AudioController.Backend {
+        @Override
+        public void check() { }
         final AtomicInteger starts = new AtomicInteger();
         final AtomicInteger stops = new AtomicInteger();
         final CountDownLatch firstStartEntered = new CountDownLatch(1);
@@ -316,6 +368,8 @@ public final class AudioControllerCheck {
     }
 
     private static class PreexistingBackend implements AudioController.Backend {
+        @Override
+        public void check() { }
         volatile boolean active = true;
         final AtomicInteger startCalls = new AtomicInteger();
         final AtomicInteger createdEngines = new AtomicInteger();
@@ -360,6 +414,8 @@ public final class AudioControllerCheck {
     }
 
     private static class CountingBackend implements AudioController.Backend {
+        @Override
+        public void check() { }
         final AtomicInteger starts = new AtomicInteger();
         final AtomicInteger stops = new AtomicInteger();
 

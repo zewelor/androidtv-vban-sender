@@ -13,11 +13,18 @@ import android.os.Looper;
 import android.util.Log;
 import java.util.concurrent.CancellationException;
 
-/** Owns serialized user requests; it never polls or restarts a failed shell engine. */
+/** Owns serialized user requests; checks run on the same worker as Start and Stop. */
 public final class VbanService extends Service {
     private AudioController controller;
     private final Handler main = new Handler(Looper.getMainLooper());
     private int latestStart;
+    private final Runnable healthCheck = new Runnable() {
+        @Override
+        public void run() {
+            controller.check();
+            main.postDelayed(this, 15000);
+        }
+    };
 
     @Override
     public void onCreate() {
@@ -72,6 +79,7 @@ public final class VbanService extends Service {
                 });
             }
         });
+        main.postDelayed(healthCheck, 15000);
     }
 
     private Notification notification(String text) {
@@ -92,6 +100,7 @@ public final class VbanService extends Service {
 
     @Override
     public void onDestroy() {
+        main.removeCallbacks(healthCheck);
         controller.close();
         super.onDestroy();
     }

@@ -31,11 +31,18 @@ public final class AppAwareHarness {
         VbanPacket encoder = new VbanPacket("ROUTING-CHECK");
         byte[] silence = new byte[4];
         int[] counter = {0};
+        String captureFault = System.getenv("VBAN_SENDER_TEST_CAPTURE");
         AppAwareController.Capture capture = active -> {
             try (DatagramChannel channel = DatagramChannel.open()) {
                 channel.connect(new InetSocketAddress("127.0.0.1", port));
                 System.out.println("SESSION_STARTED");
                 while (active.getAsBoolean()) {
+                    if (captureFault != null) {
+                        String fault = new String(Files.readAllBytes(new File(captureFault).toPath()),
+                                StandardCharsets.UTF_8);
+                        if ("DEAD".equals(fault)) throw new CaptureRestartException();
+                        if ("ERROR".equals(fault)) throw new IOException("Permanent capture error");
+                    }
                     ByteBuffer packet = encoder.encode(silence, 0, 1, counter[0]++);
                     if (channel.write(packet) != 32) {
                         throw new IllegalStateException("Synthetic datagram not sent");

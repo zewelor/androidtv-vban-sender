@@ -66,6 +66,15 @@ or an application queue. The capture buffer is twice the platform minimum, with
 a minimum of one read block. Normal operation skips diagnostic sample statistics.
 Temporary UDP port-unreachable notifications discard packets without stopping capture;
 unexpected socket and capture failures remain visible. Lost audio is not replayed.
+A foreground-detection timeout releases capture and retries; a fresh supported-app
+observation must become stable before capture resumes. Permission errors remain fatal.
+`AudioRecord.ERROR_DEAD_OBJECT` releases and recreates the recorder after a cancellable
+one-second delay, with at most three retries when failures recur within ten seconds.
+Persistent recorder failures and other capture errors remain fatal. See the
+[AudioRecord API](https://developer.android.com/reference/android/media/AudioRecord#ERROR_DEAD_OBJECT).
+The service checks engine status every 15 seconds on the Start/Stop worker and
+when the app is reopened. Checks report failures without restarting a failed engine;
+a successful check clears a temporary status-read error.
 
 ## Diagnostics and tests
 
