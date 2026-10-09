@@ -7,8 +7,9 @@ rm -rf build/classes build/test-classes build/dex
 mkdir -p build/classes build/test-classes build/dex
 find src vendor/adblib/src -name '*.java' | sort > build/sources.list
 javac -source 8 -target 8 -bootclasspath "$ANDROID_JAR" -d build/classes @build/sources.list
-javac --release 8 -cp build/classes -d build/test-classes tests/ProtocolCheck.java tests/RoutingCheck.java tests/AppAwareHarness.java tests/AdbClientCheck.java tests/AdbClientHarness.java tests/CapturePacketsHarness.java tests/AudioControllerCheck.java
+javac --release 8 -cp build/classes -d build/test-classes tests/ProtocolCheck.java tests/RoutingCheck.java tests/AppAwareHarness.java tests/AdbClientCheck.java tests/AdbClientHarness.java tests/CapturePacketsHarness.java tests/AudioControllerCheck.java tests/UdpRecoveryCheck.java
 java -cp build/classes:build/test-classes app.vbansender.ProtocolCheck
+java -cp build/classes:build/test-classes app.vbansender.UdpRecoveryCheck
 java -cp build/classes:build/test-classes app.vbansender.RoutingCheck
 java -cp build/classes:build/test-classes com.cgutman.adblib.AdbClientCheck
 java -cp build/classes:build/test-classes app.vbansender.app.AudioControllerCheck
