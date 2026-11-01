@@ -62,7 +62,13 @@ def run(frames, scenario, period, blocks):
             assert 0 < result["stop_latency_ns"] < 20000000, "Stop was held by the pacing wait"
     elif scenario == "stall":
         assert gaps[0] >= 40, "fixture must actually stall"
-        assert min(gaps[1:]) > 2, "Do not catch up with a burst after a scheduler stall"
+        assert sum(gaps[1:]) < 10, "Late packets must not add new pacing waits"
+    elif scenario == "recurring-stall":
+        assert result["max_source_lag_ns"] < period * 4, "capture source overflowed"
+        actual_span = (arrivals[-1] - arrivals[0]) / 1e9
+        expected_span = (blocks - 1) * period / 1e9
+        assert abs(actual_span - expected_span) < .06, (
+            "repeated stalls accumulated unread source audio", actual_span, expected_span)
     elif scenario == "partial":
         assert sizes == [256, 256, 1], "partial capture tail must not be padded/lost"
         assert min(gaps) > 2, "partial blocks also need pacing"
@@ -82,6 +88,7 @@ def run(frames, scenario, period, blocks):
             actual_span, expected_span)
     return {"scenario": scenario, "packet_frames": frames, "source_period_ns": period,
             "blocks": blocks, "packets": len(sizes), "pcm_frames": len(samples),
+            "max_source_lag_ms": result["max_source_lag_ns"] / 1e6,
             "iat_median_ms": statistics.median(gaps) if gaps else None,
             "iat_max_ms": max(gaps) if gaps else None}
 
@@ -90,7 +97,8 @@ def main():
     cases = [(256, "normal", 21333333, 120), (128, "normal", 21333333, 120),
              (256, "fast-clock", 20906667, 240), (256, "slow-clock", 21760000, 240),
              (256, "partial", 21333333, 1), (256, "stop", 21333333, 1),
-             (256, "stall", 21333333, 1), (256, "stop-wait", 21333333, 1)]
+             (256, "stall", 21333333, 1), (256, "stop-wait", 21333333, 1),
+             (256, "recurring-stall", 21333333, 120)]
     report = {"result": "PASS", "scope": "Synthetic source, real production packet path and UDP",
               "scenarios": [run(*case) for case in cases]}
     OUTPUT.mkdir(parents=True, exist_ok=True)

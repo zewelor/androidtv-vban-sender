@@ -34,13 +34,11 @@ public final class CapturePackets {
                 LockSupport.parkNanos(Math.min(remaining, 1000000));
             }
             output.send(pcm, offsetFrames * VbanPacket.FRAME_BYTES, frames);
-            // A delayed send never causes a catch-up burst. Rebase only within this
-            // bounded block; the following capture read follows the hardware clock.
+            // Keep the current read's deadlines after a delay. Moving them forward
+            // makes repeated stalls accumulate unread audio in AudioRecord. Catch-up
+            // is bounded to this one block; the next read follows the source clock.
             long period = frames * 1000000000L / VbanPacket.SAMPLE_RATE;
             due += period;
-            if (due < System.nanoTime()) {
-                due = System.nanoTime() + period;
-            }
             offsetFrames += frames;
         }
         return offsetFrames;

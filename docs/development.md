@@ -61,8 +61,10 @@ setting. Boot and reopening the UI also reconcile interrupted cleanup.
 Failures remain visible without a restart loop.
 
 One routing loop supports finite probes and continuous operation. Packet pacing
-follows the source clock within a bounded 1024-frame read, without catch-up bursts
-or an application queue. The capture buffer is twice the platform minimum, with
+follows the source clock within a bounded 1024-frame read. Late packets retain
+their original deadlines and can catch up within that read (at most 21.3 ms of
+audio), instead of adding waits that accumulate unread source audio. There is no
+application queue. The capture buffer is twice the platform minimum, with
 a minimum of one read block. Normal operation skips diagnostic sample statistics.
 Temporary UDP port-unreachable notifications discard packets without stopping capture;
 unexpected socket and capture failures remain visible. Lost audio is not replayed.

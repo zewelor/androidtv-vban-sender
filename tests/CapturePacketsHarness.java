@@ -15,6 +15,7 @@ public final class CapturePacketsHarness {
         int blocks = Integer.parseInt(args[4]);
         int[] sequence = {0};
         int[] sourceFrames = {0};
+        long maxSourceLag = 0;
         AtomicBoolean enabled = new AtomicBoolean(true);
         long[] stopRequested = {0};
         byte[] pcm = new byte[CapturePackets.BLOCK_FRAMES * 4];
@@ -28,6 +29,13 @@ public final class CapturePacketsHarness {
                 while (System.nanoTime() < due) {
                     LockSupport.parkNanos(Math.min(1000000, due - System.nanoTime()));
                 }
+                long sourceLag = System.nanoTime() - due;
+                maxSourceLag = Math.max(maxSourceLag, sourceLag);
+                // Model the device's finite 4096-frame capture buffer. A sender
+                // that keeps falling behind eventually loses unread source audio.
+                if (scenario.equals("recurring-stall") && sourceLag > period * 4) {
+                    throw new IllegalStateException("Synthetic capture buffer overflow: " + sourceLag);
+                }
                 int frames = scenario.equals("partial") ? 513 : CapturePackets.BLOCK_FRAMES;
                 for (int i = 0; i < frames; i++) {
                     int sample = (sourceFrames[0] + i) & 0x7fff;
@@ -39,6 +47,9 @@ public final class CapturePacketsHarness {
                 CapturePackets.send(pcm, frames * 4, packetFrames, (data, offset, count) -> {
                     if (scenario.equals("stall") && sequence[0] == 1) {
                         LockSupport.parkNanos(50000000);
+                    }
+                    if (scenario.equals("recurring-stall") && sequence[0] % 4 == 0) {
+                        LockSupport.parkNanos(12000000);
                     }
                     if (channel.write(encoder.encode(data, offset, count, sequence[0]++))
                             != 28 + count * 4) {
@@ -59,6 +70,7 @@ public final class CapturePacketsHarness {
             }
         }
         long stopLatency = stopRequested[0] == 0 ? 0 : System.nanoTime() - stopRequested[0];
-        System.out.println("{\"packets\":" + sequence[0] + ",\"stop_latency_ns\":" + stopLatency + "}");
+        System.out.println("{\"packets\":" + sequence[0] + ",\"stop_latency_ns\":" + stopLatency
+                + ",\"max_source_lag_ns\":" + maxSourceLag + "}");
     }
 }
