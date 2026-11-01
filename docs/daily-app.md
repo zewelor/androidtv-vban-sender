@@ -69,4 +69,6 @@ adb -s "$BOX" shell touch /data/local/tmp/vban-sender/stop
 ```
 
 Then open VBAN and select OFF to restore the audio setting.
-See [validation and limitations](verification.md).
+On the tested Android 12 firmware, virtual audio capture coincided with repeated
+Android TV Remote Service crashes. Network remote controls may become unavailable;
+the packet-pacing fix does not resolve that separate compatibility issue.

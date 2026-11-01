@@ -13,8 +13,7 @@ Capture compatibility depends on the device firmware and playback app;
 this is an experimental transmitter.
 
 [Setup and usage](docs/daily-app.md) ·
-[Development](docs/development.md) ·
-[Validation and limitations](docs/verification.md)
+[Development](docs/development.md)
 
 ## Build
 
