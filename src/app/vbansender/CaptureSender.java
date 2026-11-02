@@ -82,8 +82,8 @@ public final class CaptureSender {
     }
 
     static void runContinuous(OutputConfig config, BooleanSupplier keepRunning,
-            RecordingStarted recordingStarted) throws Exception {
-        runCapture(config, keepRunning, recordingStarted, false);
+            RecordingStarted recordingStarted, boolean diagnostics) throws Exception {
+        runCapture(config, keepRunning, recordingStarted, diagnostics);
     }
 
     interface RecordingStarted {
@@ -132,15 +132,20 @@ public final class CaptureSender {
             if (recorder.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
                 throw new IllegalStateException("AudioRecord did not start");
             }
+            long callbackStarted = diagnostics ? System.nanoTime() : 0;
             if (recordingStarted != null) {
                 recordingStarted.onRecording();
             }
             if (diagnostics) {
+                output.startupCallbackNanos = System.nanoTime() - callbackStarted;
+                output.captureBufferFrames = recorder.getBufferSizeInFrames();
                 System.out.println("STARTED: finite REMOTE_SUBMIX capture; monotonic_ns=" + System.nanoTime()
                         + "; buffer_frames=" + recorder.getBufferSizeInFrames());
             }
             while (keepRunning.getAsBoolean()) {
+                long readStarted = diagnostics ? System.nanoTime() : 0;
                 int read = recorder.read(pcm, 0, pcm.length, AudioRecord.READ_NON_BLOCKING);
+                if (diagnostics) output.observeRead(readStarted, System.nanoTime(), read);
                 if (read == AudioRecord.ERROR_DEAD_OBJECT) {
                     throw new CaptureRestartException();
                 }
@@ -153,6 +158,7 @@ public final class CaptureSender {
                 }
                 CapturePackets.send(pcm, read, config.packetFrames, output, keepRunning);
             }
+            if (diagnostics) output.report("CAPTURE_ENDED");
         } finally {
             recorder.release();
             Runtime.getRuntime().removeShutdownHook(cleanup);
@@ -173,6 +179,12 @@ public final class CaptureSender {
         private int peak;
         private int counter;
         private long reportDue;
+        private long previousReadNanos;
+        private long maxReadGapNanos;
+        private long maxReadNanos;
+        private long emptyReads;
+        private long startupCallbackNanos;
+        private int captureBufferFrames;
 
         PacketOutput(DatagramChannel channel, String stream, boolean reportStatistics) {
             this.channel = channel;
@@ -209,12 +221,30 @@ public final class CaptureSender {
                 }
                 long now = System.nanoTime();
                 if (now >= reportDue) {
-                    System.out.println("{\"state\":\"SENDING\",\"frames\":" + frames + ",\"sent\":" + sent
-                            + ",\"dropped\":" + dropped + ",\"peak\":" + peak + "}");
+                    report("SENDING");
                     peak = 0;
                     reportDue = now + 1000000000L;
                 }
             }
+        }
+
+        private void observeRead(long started, long finished, int bytes) {
+            if (previousReadNanos != 0) {
+                maxReadGapNanos = Math.max(maxReadGapNanos, started - previousReadNanos);
+            }
+            previousReadNanos = started;
+            maxReadNanos = Math.max(maxReadNanos, finished - started);
+            if (bytes == 0) emptyReads++;
+        }
+
+        private void report(String state) {
+            System.out.println("{\"state\":\"" + state + "\",\"frames\":" + frames
+                    + ",\"sent\":" + sent + ",\"dropped\":" + dropped + ",\"peak\":" + peak
+                    + ",\"read_gap_max_ns\":" + maxReadGapNanos
+                    + ",\"read_duration_max_ns\":" + maxReadNanos
+                    + ",\"empty_reads\":" + emptyReads
+                    + ",\"startup_callback_ns\":" + startupCallbackNanos
+                    + ",\"capture_buffer_frames\":" + captureBufferFrames + "}");
         }
     }
 }

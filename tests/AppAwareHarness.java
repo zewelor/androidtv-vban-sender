@@ -56,9 +56,16 @@ public final class AppAwareHarness {
         try (ForegroundWatcher watcher = new ForegroundWatcher()) {
             watcher.start();
             if (continuous) {
-                AppAwareController.runContinuously(watcher, capture,
-                        () -> marker == null ? !stop.exists() : marker.exists() && !stop.exists(),
-                        state -> System.out.println("ENGINE_STATE " + state));
+                if (marker == null) {
+                    AppAwareController.runContinuously(watcher, capture, () -> !stop.exists(),
+                            state -> System.out.println("ENGINE_STATE " + state));
+                } else {
+                    EngineRunGate gate = new EngineRunGate(marker, stop);
+                    if (gate.prepare()) {
+                        AppAwareController.runContinuously(watcher, capture, gate::enabled,
+                                state -> System.out.println("ENGINE_STATE " + state));
+                    }
+                }
             } else {
                 AppAwareController.run(watcher, capture, () -> !stop.exists(),
                         System.nanoTime() + seconds * 1000000000L);
@@ -77,6 +84,22 @@ public final class AppAwareHarness {
                 new String[] {"192.0.2.10", "6980", "CHECK", "9", "128"});
         if (finite.seconds != 9 || finite.packetFrames != 128) {
             throw new AssertionError("Finite configuration compatibility failed");
+        }
+        String[] normalEngine = {"192.0.2.10", "6980", "CHECK", "256",
+                "0123456789abcdef0123456789abcdef"};
+        if (AudioEngine.measurementSeconds(normalEngine) != 0
+                || AudioEngine.measurementSeconds(new String[] {"192.0.2.10", "6980", "CHECK", "256",
+                    normalEngine[4], "--measure-seconds", "60"}) != 60) {
+            throw new AssertionError("Engine measurement mode changed normal startup");
+        }
+        for (String seconds : new String[] {"0", "3601", "invalid"}) {
+            try {
+                AudioEngine.measurementSeconds(new String[] {"192.0.2.10", "6980", "CHECK", "256",
+                        normalEngine[4], "--measure-seconds", seconds});
+                throw new AssertionError("Invalid measurement duration was accepted: " + seconds);
+            } catch (IllegalArgumentException expected) {
+                // A diagnostic engine must always have a finite, explicit deadline.
+            }
         }
 
         EngineStatus status = new EngineStatus(directory,
@@ -154,7 +177,14 @@ public final class AppAwareHarness {
         if (!gate.prepare() || stop.exists() || !gate.enabled()) {
             throw new AssertionError("Enabled run marker did not prepare the engine");
         }
-        if (!marker.delete() || gate.enabled()) {
+        if (!marker.delete()) {
+            throw new AssertionError("Could not remove the run marker");
+        }
+        long stopDeadline = System.nanoTime() + 200000000L;
+        while (gate.enabled() && System.nanoTime() < stopDeadline) {
+            LockSupport.parkNanos(100000);
+        }
+        if (gate.enabled()) {
             throw new AssertionError("Deleting the run marker did not cancel the engine");
         }
         stop.delete();

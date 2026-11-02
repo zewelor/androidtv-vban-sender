@@ -63,8 +63,9 @@ final class EngineStatus {
         }
         try (FileOutputStream output = new FileOutputStream(temporary)) {
             output.write(contents);
-            output.getFD().sync();
         }
+        // This is live IPC, validated against the current run and process. Atomic
+        // publication is required; power-loss durability must not delay capture.
         try {
             Files.move(temporary.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE,
                     StandardCopyOption.REPLACE_EXISTING);

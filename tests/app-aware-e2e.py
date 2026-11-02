@@ -338,7 +338,7 @@ print(text)
     fake.chmod(0o700)
     status_directory = OUTPUT / "status-check"
     status_directory.mkdir(parents=True, exist_ok=True)
-    # 2000 fsynced writes test atomicity, not the host disk's throughput.
+    # Concurrent reads of 2000 status replacements test atomic publication.
     status = subprocess.run(JAVA + ["--status-check", str(status_directory)],
                             capture_output=True, text=True, timeout=30)
     assert status.returncode == 0 and "STATUS_CHECK_PASS" in status.stdout, \

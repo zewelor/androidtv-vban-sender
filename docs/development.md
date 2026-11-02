@@ -56,7 +56,10 @@ so seamless app transitions are not guaranteed.
 
 The app serializes ON/OFF requests. The shell engine owns the capture lock;
 a per-run marker fences delayed starts after OFF. Atomic status includes run, UID,
-PID, state, and error. OFF confirms own-process exit and restores the saved surround
+PID, state, and error; this live status does not force a physical storage sync.
+The audio loop checks run/stop files at most once per 5 ms, and an observed
+cancellation is final for that run. Startup still validates the marker directly.
+OFF confirms own-process exit and restores the saved surround
 setting. Boot and reopening the UI also reconcile interrupted cleanup.
 Failures remain visible without a restart loop.
 
@@ -116,6 +119,47 @@ adb -s "$BOX" shell am start -n app.vbansender/app.vbansender.app.ProofActivity 
 `boot-probe.py --reboot` reboots the specified device; `--cold-power-cycle`
 only observes a physical power cycle performed after READY. Use `--help` for options.
 Device reports stay in `build/device/`; review them before sharing.
+
+### Finite timing measurements
+
+Use `tools/measure-wire.py` on the existing receiver to observe packet timing
+without binding its UDP port or changing audio routing:
+
+```sh
+python3 tools/measure-wire.py --ssh-host "$RECEIVER_SSH" \
+  --ssh-config "$SSH_CONFIG" --sender-ip "$BOX_IP" --seconds 60 \
+  --output build/device/wire.json
+```
+
+This requires receiver-side `tcpdump`, Ethernet/IPv4 without options, and one
+48 kHz stereo S16LE stream. Only its 70-byte protocol headers are captured;
+the saved JSON contains timing, sequence gaps, and capture-drop counters.
+No sequence gaps do not prove that Android capture lost no samples.
+
+With the APK OFF and the expected app playing, `tools/measure-engine.py` runs
+the exact supplied measurement JAR for a finite duration. It validates the device
+copy, saves/restores the audio setting, removes its own marker and JAR, and checks
+its own STOPPED state and process exit. Keep each report in a new directory:
+
+```sh
+python3 tools/measure-engine.py --device "$BOX" --jar build/vban-engine.jar \
+  --receiver-ip "$RECEIVER_IP" --app com.amazon.amazonvideo.livingroom \
+  --seconds 60 --output build/device/prime-timing
+```
+
+The report distinguishes observed nonzero PCM from a silent capture session.
+Receiver packet delivery and a successful timing measurement do not establish
+audible quality. Repeat the same workload for both candidate and baseline.
+
+For an owned, manually started shell engine, append `--measure-seconds 60` to
+its normal five arguments. It self-terminates at that deadline, obeys the same
+run marker, foreground policy and capture lock, and emits numeric capture
+statistics to stdout at most once per second plus a final summary. They include
+the actual capture-buffer size, maximum gap between read attempts, maximum read
+duration, and the startup status callback duration. Keep stdout outside Git.
+The APK's normal launch does not enable diagnostic sampling or logging.
+Select OFF before a diagnostic engine and restore the original audio setting
+afterwards; never run two capture engines at once.
 
 The full build checks protocol golden samples, real UDP, a synthetic TCP ADB peer,
 pacing, routing, boot observation, and controller races. Reproducible reports are

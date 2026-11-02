@@ -59,6 +59,9 @@ Other engine errors appear on the screen and notification after the next status 
 (every 15 seconds while the service runs). After an error, switch OFF → ON.
 Changing audio routes can interrupt playback;
 Prime or Netflix may require restarting the content.
+For Prime on the tested Android 12 firmware, enable VBAN before opening the film.
+Changing capture while a film is playing can produce an HDMI connection error;
+reopen the content after the audio route is stable.
 Before updating, uninstalling, or force-stopping the app, select OFF:
 Force Stop can leave the detached shell engine running.
 

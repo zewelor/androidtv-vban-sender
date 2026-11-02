@@ -18,10 +18,7 @@ public final class AudioEngine {
 
     public static void main(String[] args) {
         try {
-            if (args.length != 5) {
-                throw new IllegalArgumentException(
-                        "Usage: DEST_IPV4 PORT STREAM PACKET_FRAMES RUN_HEX32");
-            }
+            int measurementSeconds = measurementSeconds(args);
             OutputConfig config = new OutputConfig(Arrays.copyOf(args, 4));
             if (!args[4].matches("[0-9a-fA-F]{32}")) {
                 throw new IllegalArgumentException("Run nonce must be 32 hexadecimal characters");
@@ -45,7 +42,7 @@ public final class AudioEngine {
                         return;
                     }
                     status.update("IDLE");
-                    runController(config, gate, status);
+                    runController(config, gate, status, measurementSeconds);
                     publishFinalStatus(lock, status, null);
                 } catch (Exception error) {
                     try {
@@ -62,8 +59,23 @@ public final class AudioEngine {
         }
     }
 
+    static int measurementSeconds(String[] args) {
+        if (args.length == 5) return 0;
+        if (args.length != 7 || !"--measure-seconds".equals(args[5])) {
+            throw new IllegalArgumentException(
+                    "Usage: DEST_IPV4 PORT STREAM PACKET_FRAMES RUN_HEX32 [--measure-seconds 1..3600]");
+        }
+        int seconds = Integer.parseInt(args[6]);
+        if (seconds < 1 || seconds > 3600) {
+            throw new IllegalArgumentException("Measurement duration must be 1..3600 seconds");
+        }
+        return seconds;
+    }
+
     private static void runController(OutputConfig config, EngineRunGate gate,
-            EngineStatus status) throws Exception {
+            EngineStatus status, int measurementSeconds) throws Exception {
+        final boolean measuring = measurementSeconds != 0;
+        final long deadline = System.nanoTime() + measurementSeconds * 1000000000L;
         try (ForegroundWatcher watcher = new ForegroundWatcher()) {
             watcher.start();
             AppAwareController.runContinuously(watcher, new AppAwareController.Capture() {
@@ -75,12 +87,12 @@ public final class AudioEngine {
                                 public void onRecording() throws Exception {
                                     status.update("SENDING");
                                 }
-                            });
+                            }, measuring);
                 }
             }, new BooleanSupplier() {
                 @Override
                 public boolean getAsBoolean() {
-                    return gate.enabled();
+                    return gate.enabled() && (!measuring || System.nanoTime() < deadline);
                 }
             }, new AppAwareController.Status() {
                 @Override

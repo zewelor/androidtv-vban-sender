@@ -7,12 +7,13 @@ rm -rf build/classes build/test-classes build/dex
 mkdir -p build/classes build/test-classes build/dex
 find src vendor/adblib/src -name '*.java' | sort > build/sources.list
 javac -source 8 -target 8 -bootclasspath "$ANDROID_JAR" -d build/classes @build/sources.list
-javac --release 8 -cp build/classes -d build/test-classes tests/ProtocolCheck.java tests/RoutingCheck.java tests/AppAwareHarness.java tests/AdbClientCheck.java tests/AdbClientHarness.java tests/CapturePacketsHarness.java tests/AudioControllerCheck.java tests/UdpRecoveryCheck.java
+javac --release 8 -cp build/classes -d build/test-classes tests/ProtocolCheck.java tests/RoutingCheck.java tests/AppAwareHarness.java tests/AdbClientCheck.java tests/AdbClientHarness.java tests/CapturePacketsHarness.java tests/AudioControllerCheck.java tests/UdpRecoveryCheck.java tests/EngineTimingHarness.java
 java -cp build/classes:build/test-classes app.vbansender.ProtocolCheck
 java -cp build/classes:build/test-classes app.vbansender.UdpRecoveryCheck
 java -cp build/classes:build/test-classes app.vbansender.RoutingCheck
 java -cp build/classes:build/test-classes com.cgutman.adblib.AdbClientCheck
 java -cp build/classes:build/test-classes app.vbansender.app.AudioControllerCheck
+java -cp build/classes:build/test-classes app.vbansender.EngineTimingHarness check build/e2e/engine-control
 find build/classes -name '*.class' -print0 | xargs -0 "$TOOLS/d8" \
     --lib "$ANDROID_JAR" --min-api 31 --output build/dex
 mkdir -p build/proof/assets/licenses
@@ -28,6 +29,8 @@ python3 tests/backend-e2e.py
 python3 tests/adb-e2e.py
 python3 tests/pacing-e2e.py
 python3 tests/boot-probe-e2e.py
+python3 tests/wire-metrics-e2e.py
+python3 tests/engine-measure-e2e.py
 sha256sum build/vban-engine.jar > build/vban-engine.jar.sha256
 cat build/vban-engine.jar.sha256
 sh tools/package-proof-in-container.sh
