@@ -224,7 +224,7 @@ def run_cleanup(report, save, adb, process=None, log_path=None):
         if state != report["original_stop"]:
             raise RuntimeError("Original stop marker state was not restored")
 
-    step("stop_restore", restore_stop, refresh=True)
+    step("stop_restore", restore_stop)
 
     def restore_surround():
         current = shell("settings get global encoded_surround_output")
@@ -239,7 +239,7 @@ def run_cleanup(report, save, adb, process=None, log_path=None):
         if restored != report["original_surround"]:
             raise RuntimeError("Original audio setting was not restored")
 
-    step("surround_restore", restore_surround, refresh=True)
+    step("surround_restore", restore_surround)
 
     def remove_jar():
         state = shell("if [ -e " + shlex.quote(report["jar_path"])
@@ -278,6 +278,10 @@ def resume_cleanup(args, parser):
         if report["primary_error"] is None:
             report["primary_error"] = "Process ended before the capture result was recorded"
     save = lambda: atomic_write(report_path, report)
+    if all(step["status"] == "done" for step in report["cleanup"].values()):
+        finalize_report(report, save)
+        print(json.dumps(report, indent=2))
+        return
     save()
     run_cleanup(report, save, ["adb", "-s", args.device])
     finalize_report(report, save)

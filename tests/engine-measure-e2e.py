@@ -19,6 +19,7 @@ p=pathlib.Path(os.environ['MEASURE_FIXTURE']); journal=pathlib.Path(os.environ['
 s=json.loads(p.read_text()); a=sys.argv[1:]
 assert a[:2]==['-s','fixture-device'],a
 def save(): p.write_text(json.dumps(s))
+s.setdefault('adb_calls',[]).append(a[2:]); save()
 def fail(name):
  n=s.setdefault('failures_seen',{}).get(name,0)+1; s['failures_seen'][name]=n; save()
  rule=s.get('failures',{}).get(name)
@@ -146,9 +147,15 @@ def happy_and_idempotent():
     assert len(report["audio_errors"]) == 1
     state_after = assert_clean(state, "null", True, result)
     assert state_after["failures_seen"]["surround_restore"] == 1
+    state_after["surround"] = "2"
+    state_after["stop"] = False
+    state.write_text(json.dumps(state_after))
+    calls_before = len(state_after["adb_calls"])
     resumed = resume(state, out, env)
     assert resumed.returncode == 0, (resumed.stdout, resumed.stderr)
     after_resume = json.loads(state.read_text())
+    assert len(after_resume["adb_calls"]) == calls_before, after_resume
+    assert after_resume["surround"] == "2" and after_resume["stop"] is False, after_resume
     assert after_resume["failures_seen"]["surround_restore"] == 1, after_resume
 
 
@@ -193,11 +200,24 @@ def independent_cleanup_errors():
     assert report["result"] == "CLEANUP_PENDING", report
     assert report["cleanup"]["surround_restore"]["status"] == "done", report
     assert report["cleanup"]["jar_remove"]["status"] != "done", report
-    assert json.loads(state.read_text())["surround"] == "3"
-    fixture = json.loads(state.read_text()); fixture["failures"] = {}; state.write_text(json.dumps(fixture))
+    before_restore_attempts = {name: len(report["cleanup"][name]["attempts"])
+                               for name in ("marker_remove", "engine_absence", "stop_restore",
+                                            "surround_restore")}
+    fixture = json.loads(state.read_text())
+    fixture["failures"] = {}
+    fixture["surround"] = "1"
+    fixture["stop"] = True
+    state.write_text(json.dumps(fixture))
     resumed = resume(state, out, env)
     assert resumed.returncode == 0, (resumed.stdout, resumed.stderr)
-    assert_clean(state, "3", False, resumed)
+    report = json.loads((out / "report.json").read_text())
+    after = json.loads(state.read_text())
+    assert after["surround"] == "1" and after["stop"] is True, after
+    assert not after["jars"] and not after["markers"], after
+    assert len(report["cleanup"]["marker_remove"]["attempts"]) > before_restore_attempts["marker_remove"]
+    assert len(report["cleanup"]["engine_absence"]["attempts"]) > before_restore_attempts["engine_absence"]
+    assert len(report["cleanup"]["stop_restore"]["attempts"]) == before_restore_attempts["stop_restore"]
+    assert len(report["cleanup"]["surround_restore"]["attempts"]) == before_restore_attempts["surround_restore"]
 
 
 def persistent_failures_stay_resumable():
