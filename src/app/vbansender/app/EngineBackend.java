@@ -17,28 +17,69 @@ final class EngineBackend implements AudioController.Backend {
     private final Context context;
     private final SharedPreferences prefs;
     private AdbCrypto crypto;
+    private String failedCleanupToken = "";
+
+    @Override public String failedCleanupToken() { return failedCleanupToken; }
+    private final java.util.function.LongSupplier nanoTime;
+    private static final long STOP_BUDGET_NANOS = 30000000000L;
 
     EngineBackend(Context context) {
+        this(context, new java.util.function.LongSupplier() {
+            @Override public long getAsLong() { return System.nanoTime(); }
+        });
+    }
+
+    EngineBackend(Context context, java.util.function.LongSupplier nanoTime) {
+        this.nanoTime = nanoTime;
         this.context = context.getApplicationContext();
         prefs = AppConfig.prefs(context);
     }
 
     private String shell(String command) throws Exception {
-        if (crypto == null) {
-            crypto = SelfAdbProof.keys(context);
-        }
-        return LocalAdb.shell(crypto, 5555, command, 10000);
+        return shellWithTimeout(command, 10000);
     }
 
-    private EngineState read() throws Exception {
-        return EngineState.parse(shell("if [ -f " + DIRECTORY + "engine-state.txt ]; then cat "
-                + DIRECTORY + "engine-state.txt; fi"));
+    private String shell(String command, long deadline) throws Exception {
+        ensureCrypto();
+        long remaining = deadline - nanoTime.getAsLong();
+        if (remaining <= 0) throw new java.net.SocketTimeoutException("Engine Stop exceeded 30 seconds");
+        return shellWithTimeout(command, (int) Math.min(10000, Math.max(1, remaining / 1000000L)));
+    }
+
+    private void ensureCrypto() throws Exception {
+        if (crypto == null) crypto = SelfAdbProof.keys(context);
+    }
+
+    private String shellWithTimeout(String command, int timeout) throws Exception {
+        ensureCrypto();
+        return LocalAdb.shell(crypto, 5555, command, timeout);
+    }
+
+    private String statusCommand() {
+        return "if [ -f " + DIRECTORY + "engine-state.txt ]; then cat "
+                + DIRECTORY + "engine-state.txt; fi";
+    }
+
+    private EngineState read() throws Exception { return EngineState.parse(shell(statusCommand())); }
+    private EngineState read(long deadline) throws Exception {
+        return EngineState.parse(shell(statusCommand(), deadline));
+    }
+
+    private String identityCommand(EngineState state) {
+        return "if [ -r /proc/" + state.pid + "/cmdline ]; then "
+                + "tr '\\000' '\\n' </proc/" + state.pid + "/cmdline; fi";
     }
 
     private boolean alive(EngineState state) throws Exception {
-        String command = "if [ -r /proc/" + state.pid + "/cmdline ]; then "
-                + "tr '\\000' '\\n' </proc/" + state.pid + "/cmdline; fi";
-        String[] words = shell(command).split("\\n");
+        return matchesIdentity(state, shell(identityCommand(state)));
+    }
+
+    private boolean alive(EngineState state, long deadline) throws Exception {
+        return matchesIdentity(state, shell(identityCommand(state), deadline));
+    }
+
+    private boolean matchesIdentity(EngineState state, String response) {
+        String[] words = response.split("\\n");
         boolean engine = false;
         boolean nonce = false;
         for (String word : words) {
@@ -61,7 +102,8 @@ final class EngineBackend implements AudioController.Backend {
 
     @Override
     public void start(BooleanSupplier stillEnabled) throws Exception {
-        if (prefs.getBoolean("cleanup_pending", false)) {
+        AudioController.Request requested = AppConfig.request(prefs);
+        if (requested.cleanupPending || !requested.offToken.isEmpty()) {
             throw new IllegalStateException("Previous cleanup is incomplete. Turn OFF, then ON to retry.");
         }
         OutputConfig config = AppConfig.read(context);
@@ -152,41 +194,41 @@ final class EngineBackend implements AudioController.Backend {
 
     @Override
     public void stop() throws Exception {
-        // Survives service/process replacement if transport fails before marker deletion.
-        AppConfig.save(prefs.edit().putBoolean("cleanup_pending", true));
-        String run = prefs.getString("active_run", "");
-        if (!run.isEmpty()) {
-            // Delete the per-run fence before checking state: a delayed child
-            // may not have written any state yet, but must still stay OFF.
-            shell("rm -f " + marker(run));
-            for (int attempt = 0; ; attempt++) {
-                EngineState state = read();
-                if (state == null || !run.equals(state.run) || !alive(state)) {
-                    break;
+        failedCleanupToken = "";
+        String token = AppConfig.beginCleanup(prefs);
+        long deadline = nanoTime.getAsLong() + STOP_BUDGET_NANOS;
+        try {
+            String run = prefs.getString("active_run", "");
+            if (!run.isEmpty()) {
+                shell("rm -f " + marker(run), deadline);
+                while (true) {
+                    EngineState state = read(deadline);
+                    if (state == null || !run.equals(state.run) || !alive(state, deadline)) break;
+                    long remaining = deadline - nanoTime.getAsLong();
+                    if (remaining <= 0) throw new java.net.SocketTimeoutException("Engine Stop exceeded 30 seconds");
+                    Thread.sleep(Math.min(200, Math.max(1, remaining / 1000000L)));
                 }
-                if (attempt == 25) {
-                    throw new IllegalStateException("Engine Stop was not confirmed");
+            }
+            if (prefs.contains("original_surround")) {
+                String original = prefs.getString("original_surround", "");
+                if (!original.matches("null|[0-3]")) throw new IllegalStateException("Invalid saved surround setting");
+                shell("null".equals(original) ? "settings delete global encoded_surround_output"
+                        : "settings put global encoded_surround_output " + original, deadline);
+                if (!original.equals(shell("settings get global encoded_surround_output", deadline).trim())) {
+                    throw new IllegalStateException("Could not restore standard audio settings");
                 }
-                Thread.sleep(200);
             }
+            AppConfig.finishCleanup(prefs, token);
+        } catch (Exception error) {
+            failedCleanupToken = token;
+            throw error;
         }
-        if (prefs.contains("original_surround")) {
-            String original = prefs.getString("original_surround", "");
-            if (!original.matches("null|[0-3]")) {
-                throw new IllegalStateException("Invalid saved surround setting");
-            }
-            shell("null".equals(original) ? "settings delete global encoded_surround_output"
-                    : "settings put global encoded_surround_output " + original);
-            if (!original.equals(shell("settings get global encoded_surround_output").trim())) {
-                throw new IllegalStateException("Could not restore standard audio settings");
-            }
-        }
-        AppConfig.save(prefs.edit().remove("active_run").remove("original_surround").remove("cleanup_pending"));
     }
 
     @Override
     public void check() throws Exception {
-        EngineState state = read();
+        String snapshot = shell(statusCommand());
+        EngineState state = EngineState.parse(snapshot);
         String run = prefs.getString("active_run", "");
         if (state == null || !state.run.equals(run)) {
             throw new IllegalStateException("Engine stopped. Turn OFF, then ON to retry.");
@@ -197,5 +239,6 @@ final class EngineBackend implements AudioController.Backend {
         if (!alive(state)) {
             throw new IllegalStateException("Engine stopped. Turn OFF, then ON to retry.");
         }
+        prefs.edit().putString("engine_snapshot", snapshot).apply();
     }
 }

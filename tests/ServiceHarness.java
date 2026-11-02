@@ -34,6 +34,7 @@ public final class ServiceHarness {
         ServiceHarness h = new ServiceHarness();
         try {
             switch (args[0]) {
+                case "new_off_before_failed_stop": h.newOffBeforeFailedStop(); break;
                 case "delayed_commands": h.delayedCommands(); break;
                 case "failed_stop": h.failedStop(); break;
                 case "stale_off": h.staleOff(); break;
@@ -61,6 +62,23 @@ public final class ServiceHarness {
         AppConfig.save(prefs.edit().putBoolean("enabled", enabled));
         ui.startForegroundService(new Intent(ui, VbanService.class));
         deliver();
+    }
+
+    private void newOffBeforeFailedStop() throws Exception {
+        reconcileSaved(true);
+        await(() -> "ON".equals(prefs.getString("controller_state", "")), "initial ON");
+        backend.failStop.set(true);
+        EngineBackend.beforeCleanup = () -> { choose(false); choose(true); deliver(); deliver(); };
+        choose(false); deliver();
+        await(() -> !prefs.getString("last_error", "").isEmpty(), "failed newer token");
+        Thread.sleep(200);
+        require(backend.stops.get() == 1, "failed captured token retried automatically");
+        choose(true); deliver();
+        Thread.sleep(100);
+        require(backend.stops.get() == 1 && backend.starts.get() == 1, "ON retried a failed token");
+        choose(false); deliver();
+        await(() -> controllerUncheckedOff(), "fresh OFF retry");
+        require(backend.stops.get() == 2, "fresh OFF failed to retry cleanup");
     }
 
     private void delayedCommands() throws Exception {
@@ -118,7 +136,13 @@ public final class ServiceHarness {
         require(!service.stopped && service.foreground, "foreground removed after rejected shutdown");
         choose(false); deliver();
         drain();
+        await(() -> controllerUncheckedOff(), "repeated OFF cleanup");
+        drain();
         require(service.stopped && !service.foreground, "repeated confirmed OFF did not finish shutdown");
+    }
+
+    private boolean controllerUncheckedOff() {
+        try { return controller().isOff(); } catch (Exception e) { throw new AssertionError(e); }
     }
 
     private AudioController controller() throws Exception {
@@ -193,6 +217,9 @@ public final class ServiceHarness {
             choose(false);
             replacement.serverStart = ++startId;
             replacement.onStartCommand(Context.commands.get(command++), 0, startId);
+            await(() -> "OFF".equals(prefs.getString("controller_state", ""))
+                    && prefs.getString("pending_off_token", "").isEmpty(), "explicit retry cleanup");
+            drain();
             require(replacement.stopped && prefs.getString("last_error", "").isEmpty(), "confirmed OFF retained an obsolete error");
         } finally { backend.releaseStart.countDown(); replacement.onDestroy(); }
         choose(true);

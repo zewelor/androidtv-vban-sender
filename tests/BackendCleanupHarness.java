@@ -9,14 +9,36 @@ public final class BackendCleanupHarness {
     private static String surround = "1";
     private static boolean ignoreRestore;
     private static int commands;
+    private static boolean slow;
+    private static long nanos;
+    private static boolean newerOffOnRestore;
     public static String command(String command) throws Exception {
+        return command(command, 10000);
+    }
+
+    public static String command(String command, int timeout) throws Exception {
         commands++;
+        if (slow) {
+            long remaining = 30000000000L - nanos;
+            require(remaining > 0 && timeout <= Math.min(10000, remaining / 1000000L),
+                    "Stop command exceeded remaining overall budget");
+            nanos += Math.min(9000000000L, timeout * 1000000L);
+            if (command.startsWith("if [ -f ")) return "run=0123456789abcdef0123456789abcdef uid=2000 pid=123 state=SENDING message=none";
+            if (command.contains("/cmdline")) return "app.vbansender.AudioEngine\n0123456789abcdef0123456789abcdef";
+        }
         if (command.startsWith("rm -f ")) {
             if (failMarker) throw new IOException("Transport failed before marker deletion");
             return "";
         }
         if (command.startsWith("if [ -f ")) return "";
-        if (command.equals("settings get global encoded_surround_output")) return surround;
+        if (command.equals("settings get global encoded_surround_output")) {
+            if (newerOffOnRestore) {
+                newerOffOnRestore = false;
+                AppConfig.accept(Context.prefs, false);
+                AppConfig.accept(Context.prefs, true);
+            }
+            return surround;
+        }
         if (command.startsWith("settings put global encoded_surround_output ")) {
             if (!ignoreRestore) surround = command.substring(command.lastIndexOf(' ') + 1);
             return "";
@@ -56,6 +78,25 @@ public final class BackendCleanupHarness {
         AppConfig.save(prefs.edit().putString("original_surround", "null"));
         new EngineBackend(new Context()).stop();
         require("null".equals(surround), "absent original surround setting was not restored");
+        // OFF arriving during restoration must survive the older Stop's commit.
+        AppConfig.save(prefs.edit().putString("active_run", run).putString("original_surround", "0"));
+        AppConfig.accept(prefs, false);
+        String oldToken = AppConfig.request(prefs).offToken;
+        newerOffOnRestore = true;
+        new EngineBackend(new Context()).stop();
+        require(!AppConfig.request(prefs).offToken.isEmpty()
+                && !oldToken.equals(AppConfig.request(prefs).offToken), "older Stop erased a newer OFF");
+        before = commands;
+        new EngineBackend(new Context()).stop();
+        require(commands == before && AppConfig.request(prefs).offToken.isEmpty(), "second obligation should acknowledge locally");
+
+        AppConfig.save(prefs.edit().putString("active_run", run).putString("original_surround", "0"));
+        slow = true; nanos = 0; before = commands;
+        try { new EngineBackend(new Context(), () -> nanos).stop(); throw new AssertionError("Stop must exhaust overall budget"); }
+        catch (java.net.SocketTimeoutException expected) { }
+        require(nanos == 30000000000L && commands - before == 4, "Stop did not obey one budget");
+        require(prefs.getBoolean("cleanup_pending", false) && prefs.contains("active_run")
+                && prefs.contains("original_surround"), "timeout discarded recovery state");
         System.out.println("BACKEND_CLEANUP_PASS");
     }
 

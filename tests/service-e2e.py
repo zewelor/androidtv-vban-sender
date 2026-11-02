@@ -12,7 +12,7 @@ package android.content;
 public interface SharedPreferences {
  String getString(String k,String d); boolean getBoolean(String k,boolean d);
  boolean contains(String k); Editor edit();
- interface Editor { Editor putString(String k,String v); Editor putBoolean(String k,boolean v); Editor remove(String k); boolean commit(); }
+ interface Editor { Editor putString(String k,String v); Editor putBoolean(String k,boolean v); Editor remove(String k); boolean commit(); default void apply(){commit();} }
 }
 """,
     "android/content/Context.java": """
@@ -93,9 +93,14 @@ public class Service extends android.content.Context {
 package app.vbansender.app;
 public class EngineBackend implements AudioController.Backend {
  public static AudioController.Backend delegate;
+ public static Runnable beforeCleanup;
  public EngineBackend(android.content.Context c) { }
  public void start(java.util.function.BooleanSupplier e)throws Exception{delegate.start(e);}
- public void stop()throws Exception{delegate.stop();} public void check()throws Exception{delegate.check();}
+ private final android.content.SharedPreferences prefs=AppConfig.prefs(new android.content.Context());
+ private String failed="";
+ public String failedCleanupToken(){return failed;}
+ public void stop()throws Exception{if(beforeCleanup!=null){Runnable r=beforeCleanup;beforeCleanup=null;r.run();}String token=AppConfig.beginCleanup(prefs);failed="";try{delegate.stop();AppConfig.finishCleanup(prefs,token);}catch(Exception e){failed=token;throw e;}}
+ public void check()throws Exception{delegate.check();}
 }
 """,
 }
@@ -118,7 +123,7 @@ def main():
     results = {}
     for scenario in ("delayed_commands", "failed_stop", "stale_off", "shutdown_rejected",
                      "off_on_during_check", "replacement_during_start", "replacement_with_pending_off",
-                     "replacement_cleanup_fails"):
+                     "replacement_cleanup_fails", "new_off_before_failed_stop"):
         result = subprocess.run(["java", "-cp", str(classes), "app.vbansender.app.ServiceHarness", scenario],
                                 text=True, capture_output=True, timeout=15)
         results[scenario] = {"exit": result.returncode, "stdout": result.stdout, "stderr": result.stderr}

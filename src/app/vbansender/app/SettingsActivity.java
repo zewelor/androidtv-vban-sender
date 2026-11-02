@@ -102,7 +102,8 @@ public final class SettingsActivity extends Activity {
     }
 
     private boolean editable() {
-        return !prefs.getBoolean("enabled", false)
+        return prefs.getString("pending_off_token", "").isEmpty()
+                && !prefs.getBoolean("enabled", false)
                 && "OFF".equals(prefs.getString("controller_state", "OFF"))
                 && prefs.getString("active_run", "").isEmpty()
                 && !prefs.contains("original_surround")

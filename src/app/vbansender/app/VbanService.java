@@ -16,7 +16,6 @@ import java.util.concurrent.CancellationException;
 
 /** Owns serialized user requests; checks run on the same worker as Start and Stop. */
 public final class VbanService extends Service {
-    private static final String EXTRA_ENABLED = "enabled";
     private AudioController controller;
     private final Handler main = new Handler(Looper.getMainLooper());
     private int latestStart;
@@ -31,9 +30,8 @@ public final class VbanService extends Service {
 
     /** Saves the user's choice without guessing the controller's progress or clearing errors. */
     static void setEnabled(Context context, boolean enabled) {
-        AppConfig.save(AppConfig.prefs(context).edit().putBoolean("enabled", enabled));
-        context.startForegroundService(new Intent(context, VbanService.class)
-                .putExtra(EXTRA_ENABLED, enabled));
+        AppConfig.accept(AppConfig.prefs(context), enabled);
+        context.startForegroundService(new Intent(context, VbanService.class));
     }
 
     @Override
@@ -78,6 +76,10 @@ public final class VbanService extends Service {
                     }
                 });
             }
+        }, new AudioController.Requests() {
+            @Override public AudioController.Request read() {
+                return AppConfig.request(AppConfig.prefs(VbanService.this));
+            }
         });
         main.postDelayed(healthCheck, 15000);
     }
@@ -112,10 +114,7 @@ public final class VbanService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         latestStart = startId;
-        boolean enabled = intent != null && intent.hasExtra(EXTRA_ENABLED)
-                ? intent.getBooleanExtra(EXTRA_ENABLED, false)
-                : AppConfig.prefs(this).getBoolean("enabled", false);
-        controller.request(enabled);
+        controller.reconcileSaved();
         publishCurrentState();
         return START_NOT_STICKY;
     }

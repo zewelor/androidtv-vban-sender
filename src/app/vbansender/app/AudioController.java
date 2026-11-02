@@ -11,6 +11,20 @@ public final class AudioController implements AutoCloseable {
         void start(BooleanSupplier stillEnabled) throws Exception;
         void stop() throws Exception;
         void check() throws Exception;
+        default String failedCleanupToken() { return ""; }
+    }
+
+    public interface Requests { Request read(); }
+
+    public static final class Request {
+        final boolean enabled;
+        final String offToken;
+        final boolean cleanupPending;
+        public Request(boolean enabled, String offToken, boolean cleanupPending) {
+            this.enabled = enabled;
+            this.offToken = offToken;
+            this.cleanupPending = cleanupPending;
+        }
     }
 
     public interface Listener {
@@ -23,6 +37,32 @@ public final class AudioController implements AutoCloseable {
     private final Object lock = new Object();
     private final Backend backend;
     private final Listener listener;
+    private final Requests requests;
+    private String observedOffToken = "";
+    private boolean durablePending;
+    private boolean cleanupIncomplete;
+    private String recoveryToken;
+    private boolean initialCleanup;
+    private boolean firstWork = true;
+
+    private void refreshLocked() {
+        if (requests == null) return;
+        Request current = requests.read();
+        desired = current.enabled;
+        boolean wasPending = durablePending;
+        durablePending = !current.offToken.isEmpty();
+        if (wasPending && !durablePending && !engineMayBeActive && !backendStateKnown) {
+            // A preceding owner on the shared worker has acknowledged this token.
+            engineFence = offFence;
+        }
+        cleanupIncomplete = current.cleanupPending;
+        if (durablePending && !current.offToken.equals(observedOffToken)) {
+            observedOffToken = current.offToken;
+            offFence++;
+            if (recoveryToken != null && !recoveryToken.equals(current.offToken)) recoveryToken = null;
+        }
+    }
+
     // An unfinished job may outlive its service. Replacement controllers must wait for it.
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor(new ThreadFactory() {
         @Override
@@ -49,11 +89,33 @@ public final class AudioController implements AutoCloseable {
     private State state;
 
     public AudioController(Backend backend, Listener listener) {
+        this(backend, listener, null);
+    }
+
+    public AudioController(Backend backend, Listener listener, Requests requests) {
         if (backend == null || listener == null) {
             throw new NullPointerException("backend and listener are required");
         }
         this.backend = backend;
         this.listener = listener;
+        this.requests = requests;
+        if (requests != null) {
+            Request initial = requests.read();
+            initialCleanup = initial.cleanupPending;
+            recoveryToken = initial.cleanupPending ? initial.offToken : null;
+            refreshLocked();
+        }
+    }
+
+    /** Dispatch is a wakeup; persisted intent is the source of truth. */
+    public void reconcileSaved() {
+        synchronized (lock) {
+            if (closed) throw new IllegalStateException("AudioController is closed");
+            refreshLocked();
+            requestVersion++;
+            checkRequested = desired && state == State.ON;
+            scheduleIfNeededLocked();
+        }
     }
 
     /** Updates the target state and returns without waiting for backend work. */
@@ -75,6 +137,7 @@ public final class AudioController implements AutoCloseable {
     /** Checks the detached engine on the same worker as Start and Stop. */
     public void check() {
         synchronized (lock) {
+            refreshLocked();
             if (closed || !desired || state != State.ON) return;
             checkRequested = true;
             scheduleIfNeededLocked();
@@ -84,7 +147,8 @@ public final class AudioController implements AutoCloseable {
     /** True only when the current OFF request has completed backend cleanup. */
     public boolean isOff() {
         synchronized (lock) {
-            return !closed && !desired && state == State.OFF
+            refreshLocked();
+            return !closed && !desired && !durablePending && !cleanupIncomplete && state == State.OFF
                     && backendStateKnown && !engineMayBeActive;
         }
     }
@@ -125,14 +189,14 @@ public final class AudioController implements AutoCloseable {
             return !engineMayBeActive && (!backendStateKnown || state != State.ON)
                     && requestVersion > failedStartVersion;
         }
-        if (engineMayBeActive || !backendStateKnown) {
+        if (durablePending || engineMayBeActive || !backendStateKnown) {
             return offFence > failedStopFence;
         }
         return state != State.OFF;
     }
 
     private boolean cleanupRequiredLocked() {
-        return offFence > engineFence && (engineMayBeActive || !backendStateKnown);
+        return durablePending || offFence > engineFence && (engineMayBeActive || !backendStateKnown);
     }
 
     private void runWorker() {
@@ -141,6 +205,7 @@ public final class AudioController implements AutoCloseable {
         } finally {
             synchronized (lock) {
                 workerScheduled = false;
+                refreshLocked();
                 scheduleIfNeededLocked();
             }
         }
@@ -156,7 +221,13 @@ public final class AudioController implements AutoCloseable {
             long startFence = 0;
             long stopFence = 0;
             synchronized (lock) {
+                refreshLocked();
+                if (firstWork) {
+                    firstWork = false;
+                    if (requests != null && !initialCleanup && cleanupIncomplete) recoveryToken = observedOffToken;
+                }
                 boolean cleanup = cleanupRequiredLocked() && offFence > failedStopFence;
+                if (cleanupRequiredLocked() && !cleanup) return;
                 if (closed && !cleanup) {
                     return;
                 }
@@ -211,7 +282,8 @@ public final class AudioController implements AutoCloseable {
         Exception failure = null;
         try { backend.check(); } catch (Exception error) { failure = error; }
         synchronized (lock) {
-            if (closed || !desired || requestVersion != version) return;
+            refreshLocked();
+            if (closed || !desired || durablePending || requestVersion != version) return;
             if (failure != null) {
                 healthFailed = true;
                 notifyError(failure);
@@ -276,21 +348,31 @@ public final class AudioController implements AutoCloseable {
             backend.stop();
         } catch (Exception error) {
             synchronized (lock) {
-                failedStopFence = fenceAtStart;
+                refreshLocked();
+                failedStopFence = !backend.failedCleanupToken().isEmpty()
+                        && backend.failedCleanupToken().equals(observedOffToken)
+                        ? offFence : fenceAtStart;
                 engineMayBeActive = true;
                 backendStateKnown = false;
             }
             notifyError(error);
             synchronized (lock) {
                 // A new OFF request during the failed call is an explicit cleanup retry.
-                return offFence > fenceAtStart;
+                return offFence > failedStopFence;
             }
         }
 
         synchronized (lock) {
+            refreshLocked();
             engineMayBeActive = false;
             backendStateKnown = true;
             failedStopFence = -1;
+            if (durablePending) return true;
+            if (recoveryToken != null) {
+                failedStartVersion = requestVersion;
+                recoveryToken = null;
+                notifyError(new IllegalStateException("Interrupted cleanup recovered. Turn OFF, then ON to retry."));
+            }
         }
         transition(State.OFF);
         return true;
@@ -298,14 +380,16 @@ public final class AudioController implements AutoCloseable {
 
     private boolean isCurrentStart(long startFence) {
         synchronized (lock) {
-            return !closed && desired && offFence == startFence;
+            refreshLocked();
+            return !closed && desired && !durablePending && offFence == startFence;
         }
     }
 
     private boolean markOnIfCurrent(long startFence) {
         boolean changed;
         synchronized (lock) {
-            if (closed || !desired || offFence != startFence) {
+            refreshLocked();
+            if (closed || !desired || durablePending || offFence != startFence) {
                 return false;
             }
             changed = state != State.ON;

@@ -6,6 +6,47 @@ import app.vbansender.OutputConfig;
 
 /** One saved receiver configuration; production has no device discovery. */
 final class AppConfig {
+    // Never held across remote work or controller callbacks.
+    static final Object CONTROL_LOCK = new Object();
+
+    static AudioController.Request request(SharedPreferences prefs) {
+        synchronized (CONTROL_LOCK) {
+            String token = prefs.getString("pending_off_token", "");
+            if (prefs.getBoolean("cleanup_pending", false) && token.isEmpty()) {
+                token = java.util.UUID.randomUUID().toString();
+                save(prefs.edit().putString("pending_off_token", token));
+            }
+            return new AudioController.Request(prefs.getBoolean("enabled", false), token,
+                    prefs.getBoolean("cleanup_pending", false));
+        }
+    }
+
+    static void accept(SharedPreferences prefs, boolean enabled) {
+        synchronized (CONTROL_LOCK) {
+            SharedPreferences.Editor edit = prefs.edit().putBoolean("enabled", enabled);
+            if (!enabled) edit.putString("pending_off_token", java.util.UUID.randomUUID().toString());
+            save(edit);
+        }
+    }
+
+    static String beginCleanup(SharedPreferences prefs) {
+        synchronized (CONTROL_LOCK) {
+            String token = request(prefs).offToken;
+            if (token.isEmpty()) token = java.util.UUID.randomUUID().toString();
+            save(prefs.edit().putString("pending_off_token", token).putBoolean("cleanup_pending", true));
+            return token;
+        }
+    }
+
+    static void finishCleanup(SharedPreferences prefs, String token) {
+        synchronized (CONTROL_LOCK) {
+            SharedPreferences.Editor edit = prefs.edit().remove("active_run")
+                    .remove("original_surround").remove("cleanup_pending").remove("engine_snapshot");
+            if (token.equals(prefs.getString("pending_off_token", ""))) edit.remove("pending_off_token");
+            save(edit);
+        }
+    }
+
     static SharedPreferences prefs(Context context) {
         return context.getSharedPreferences("vban", Context.MODE_PRIVATE);
     }
@@ -30,7 +71,8 @@ final class AppConfig {
 
     static boolean needsReconcile(Context context) {
         SharedPreferences prefs = prefs(context);
-        return prefs.getBoolean("enabled", false)
+        return !prefs.getString("pending_off_token", "").isEmpty()
+                || prefs.getBoolean("enabled", false)
                 || prefs.getBoolean("cleanup_pending", false)
                 || !prefs.getString("active_run", "").isEmpty()
                 || prefs.contains("original_surround")

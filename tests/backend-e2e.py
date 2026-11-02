@@ -18,7 +18,7 @@ def main():
     stubs.update({
         "com/cgutman/adblib/AdbCrypto.java": "package com.cgutman.adblib; public class AdbCrypto { }",
         "app/vbansender/app/SelfAdbProof.java": "package app.vbansender.app; public class SelfAdbProof { public static com.cgutman.adblib.AdbCrypto keys(android.content.Context c){return new com.cgutman.adblib.AdbCrypto();} }",
-        "app/vbansender/LocalAdb.java": "package app.vbansender; public class LocalAdb { public static String shell(com.cgutman.adblib.AdbCrypto c,int port,String cmd,int timeout)throws Exception{return app.vbansender.app.BackendCleanupHarness.command(cmd);} }",
+        "app/vbansender/LocalAdb.java": "package app.vbansender; public class LocalAdb { public static String shell(com.cgutman.adblib.AdbCrypto c,int port,String cmd,int timeout)throws Exception{return app.vbansender.app.BackendCleanupHarness.command(cmd,timeout);} }",
     })
     source, classes = OUT / "adapters", OUT / "classes"
     classes.mkdir(parents=True, exist_ok=True)
