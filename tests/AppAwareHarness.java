@@ -204,12 +204,13 @@ public final class AppAwareHarness {
         if (!marker.delete()) {
             throw new AssertionError("Could not remove the run marker");
         }
-        long stopDeadline = System.nanoTime() + 200000000L;
+        // The 500 ms file-polling contract includes scheduler headroom here.
+        long stopDeadline = System.nanoTime() + 1000000000L;
         while (gate.enabled() && System.nanoTime() < stopDeadline) {
             LockSupport.parkNanos(100000);
         }
         if (gate.enabled()) {
-            throw new AssertionError("Deleting the run marker did not cancel the engine");
+            throw new AssertionError("Deleting the run marker did not cancel within one second");
         }
         stop.delete();
     }

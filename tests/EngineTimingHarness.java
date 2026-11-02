@@ -8,7 +8,10 @@ import java.util.concurrent.locks.LockSupport;
 
 /** Real marker cancellation and status IPC, with bounded filesystem polling. */
 public final class EngineTimingHarness {
-    private static final long POLL_NANOS = 5000000L;
+    private static final long POLL_NANOS = 500000000L;
+    private static final long POLL_OBSERVATION_NANOS = 250000000L;
+    private static final long CALL_INTERVAL_NANOS = 1000000L;
+    private static final long CANCELLATION_TIMEOUT_NANOS = 1000000000L;
 
     public static void main(String[] args) throws Exception {
         File directory = new File(args[1]);
@@ -37,14 +40,20 @@ public final class EngineTimingHarness {
         marker.probes = 0;
         stop.probes = 0;
         long started = System.nanoTime();
-        for (int i = 0; i < 20000; i++) {
+        long nextCall = started;
+        do {
             require(gate.enabled(), "Valid run canceled during polling");
-        }
+            nextCall += CALL_INTERVAL_NANOS;
+            LockSupport.parkNanos(Math.max(0, nextCall - System.nanoTime()));
+        } while (System.nanoTime() - started < POLL_OBSERVATION_NANOS);
         long elapsed = System.nanoTime() - started;
-        long maximum = 2 + elapsed / POLL_NANOS;
+        long maximum = 1 + elapsed / POLL_NANOS;
         require(marker.probes <= maximum && stop.probes <= maximum,
-                "Filesystem polling is unbounded: marker=" + marker.probes
+                "Filesystem polling is too frequent: marker=" + marker.probes
                 + ", stop=" + stop.probes + ", maximum=" + maximum);
+        System.out.println("{\"poll_window_ns\":" + elapsed + ",\"marker_probes\":"
+                + marker.probes + ",\"stop_probes\":" + stop.probes
+                + ",\"maximum_per_file\":" + maximum + "}");
     }
 
     private static void cancellationIsFinal(File directory, boolean stopFile) throws Exception {
@@ -58,8 +67,8 @@ public final class EngineTimingHarness {
         if (stopFile) Files.write(stop.toPath(), new byte[0]);
         else Files.delete(marker.toPath());
         while (gate.enabled()) {
-            require(System.nanoTime() - canceledAt < 200000000L,
-                    "Real marker cancellation did not arrive within 200 ms");
+            require(System.nanoTime() - canceledAt < CANCELLATION_TIMEOUT_NANOS,
+                    "Real marker cancellation did not arrive within 1000 ms");
             LockSupport.parkNanos(100000);
         }
         Files.write(marker.toPath(), new byte[0]);
@@ -86,7 +95,8 @@ public final class EngineTimingHarness {
         long canceledAt = System.nanoTime();
         Files.delete(marker.toPath());
         while (gate.enabled()) {
-            require(System.nanoTime() - canceledAt < 200000000L, "Cancellation timed out");
+            require(System.nanoTime() - canceledAt < CANCELLATION_TIMEOUT_NANOS,
+                    "Cancellation timed out after 1000 ms");
             LockSupport.parkNanos(100000);
         }
         long cancellationNanos = System.nanoTime() - canceledAt;

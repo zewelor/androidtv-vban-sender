@@ -5,7 +5,7 @@ import java.io.IOException;
 
 /** Per-run APK marker fences a delayed app_process launch before it clears Stop. */
 final class EngineRunGate {
-    private static final long CHECK_INTERVAL_NANOS = 5000000L;
+    private static final long CHECK_INTERVAL_NANOS = 500000000L;
     private final File runMarker;
     private final File stopMarker;
     private boolean checked;

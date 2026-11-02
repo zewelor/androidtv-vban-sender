@@ -57,8 +57,9 @@ so seamless app transitions are not guaranteed.
 The app serializes ON/OFF requests. The shell engine owns the capture lock;
 a per-run marker fences delayed starts after OFF. Atomic status includes run, UID,
 PID, state, and error; this live status does not force a physical storage sync.
-The audio loop checks run/stop files at most once per 5 ms, and an observed
-cancellation is final for that run. Startup still validates the marker directly.
+The audio loop checks run/stop files at most once per 500 ms, which can add up to
+500 ms to OFF marker detection; an observed cancellation is final for that run.
+Startup validates the run marker immediately.
 OFF confirms own-process exit and restores the saved surround
 setting. One monotonic 30-second budget covers Stop's ADB commands and polling;
 each command is limited by the remaining budget. Timeout preserves cleanup state. Boot and reopening the UI also reconcile interrupted cleanup.
