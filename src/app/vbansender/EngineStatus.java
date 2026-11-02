@@ -10,7 +10,8 @@ import java.nio.file.StandardCopyOption;
 /** Atomic, bounded status file consumed by the companion APK. */
 final class EngineStatus {
     private static final int MAX_MESSAGE_CHARS = 300;
-    private static final int MAX_STATUS_BYTES = 512;
+    private static final int MAX_STATUS_BYTES = 1024;
+    private static final long PUBLISH_INTERVAL_NANOS = 1000000000L;
     private static final String[] STATES = {
             "IDLE", "STARTING_CAPTURE", "SENDING", "STOPPED", "ERROR"
     };
@@ -20,23 +21,35 @@ final class EngineStatus {
     private final int pid;
     private final File destination;
     private final File temporary;
+    private final CaptureProgress progress;
+    private String lastState;
+    private long lastPublishedNanos;
 
     EngineStatus(File directory, String run, int uid, int pid) {
+        this(directory, run, uid, pid, new CaptureProgress());
+    }
+
+    EngineStatus(File directory, String run, int uid, int pid, CaptureProgress progress) {
         if (run == null || !run.matches("[0-9a-fA-F]{32}")) {
             throw new IllegalArgumentException("Run nonce must be 32 hexadecimal characters");
         }
-        if (uid < 0 || pid <= 0) {
+        if (uid < 0 || pid <= 0 || progress == null) {
             throw new IllegalArgumentException("Invalid process identity");
         }
         this.run = run;
         this.uid = uid;
         this.pid = pid;
+        this.progress = progress;
         destination = new File(directory, "engine-state.txt");
         temporary = new File(directory, "engine-state.txt.tmp");
     }
 
     synchronized void update(String state) throws IOException {
-        write(state, "none");
+        publish(state, "none", false);
+    }
+
+    synchronized void heartbeat(String state) throws IOException {
+        publish(state, "none", false);
     }
 
     synchronized void updateError(Throwable error) throws IOException {
@@ -44,10 +57,10 @@ final class EngineStatus {
         if (message == null || message.isEmpty()) {
             message = error.getClass().getSimpleName();
         }
-        write("ERROR", message);
+        publish("ERROR", message, true);
     }
 
-    private void write(String state, String message) throws IOException {
+    private void publish(String state, String message, boolean force) throws IOException {
         boolean validState = false;
         for (String allowed : STATES) {
             validState |= allowed.equals(state);
@@ -55,11 +68,21 @@ final class EngineStatus {
         if (!validState) {
             throw new IllegalArgumentException("Invalid engine state: " + state);
         }
+        long now = System.nanoTime();
+        boolean changed = !state.equals(lastState);
+        if (!force && !changed && now - lastPublishedNanos < PUBLISH_INTERVAL_NANOS) {
+            return;
+        }
+        progress.observe(now);
+        CaptureProgress.Snapshot snapshot = progress.snapshot();
         String line = "run=" + run + " uid=" + uid + " pid=" + pid + " state=" + state
+                + " v=2 frames_read=" + snapshot.framesRead + " sent=" + snapshot.sent
+                + " dropped=" + snapshot.dropped + " observed_ns=" + snapshot.observedNanos
+                + " last_read_ns=" + snapshot.lastReadNanos + " last_send_ns=" + snapshot.lastSendNanos
                 + " message=" + sanitize(message) + "\n";
         byte[] contents = line.getBytes(StandardCharsets.UTF_8);
         if (contents.length > MAX_STATUS_BYTES) {
-            throw new IOException("Engine status exceeds 512 bytes");
+            throw new IOException("Engine status exceeds 1024 bytes");
         }
         try (FileOutputStream output = new FileOutputStream(temporary)) {
             output.write(contents);
@@ -73,6 +96,8 @@ final class EngineStatus {
             temporary.delete();
             throw error;
         }
+        lastState = state;
+        lastPublishedNanos = now;
     }
 
     private static String sanitize(String input) {

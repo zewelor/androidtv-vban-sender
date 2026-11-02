@@ -113,10 +113,12 @@ public final class AppAwareHarness {
                 try {
                     byte[] contents = Files.readAllBytes(state);
                     String line = new String(contents, StandardCharsets.UTF_8);
-                    if (contents.length > 512 || !line.endsWith("\n")
+                    if (contents.length > 1024 || !line.endsWith("\n")
                             || line.indexOf('\n') != line.length() - 1
                             || !line.matches("run=0123456789abcdef0123456789abcdef uid=2000 pid=1234 "
-                                    + "state=(IDLE|STARTING_CAPTURE|SENDING|STOPPED|ERROR) message=.*\\n")) {
+                                    + "state=(IDLE|STARTING_CAPTURE|SENDING|STOPPED|ERROR) v=2 "
+                                    + "frames_read=0 sent=0 dropped=0 observed_ns=[0-9]+ "
+                                    + "last_read_ns=0 last_send_ns=0 message=.*\\n")) {
                         throw new AssertionError("Torn or malformed engine status: " + line);
                     }
                 } catch (Throwable error) {
@@ -144,16 +146,38 @@ public final class AppAwareHarness {
             throw new AssertionError("Engine status was not atomically readable", failure.get());
         }
         String finalLine = new String(Files.readAllBytes(state), StandardCharsets.UTF_8);
-        if (!finalLine.startsWith("run=0123456789abcdef0123456789abcdef uid=2000 pid=1234 state=ERROR message=fixture ")
-                || finalLine.length() > 512 || finalLine.indexOf('\n') != finalLine.length() - 1) {
+        if (!finalLine.startsWith("run=0123456789abcdef0123456789abcdef uid=2000 pid=1234 "
+                + "state=ERROR v=2 frames_read=0 sent=0 dropped=0 observed_ns=")
+                || !finalLine.contains(" message=fixture ") || finalLine.length() > 1024
+                || finalLine.indexOf('\n') != finalLine.length() - 1) {
             throw new AssertionError("Engine error state was not bounded and single-line: " + finalLine);
         }
         if (new File(directory, "engine-state.txt.tmp").exists()) {
             throw new AssertionError("Temporary status file remained after replacement");
         }
+        metricEncodingCheck(directory);
         gateCheck(directory);
         leaseOrderingCheck(new File(directory, "lease-check"));
         System.out.println("STATUS_CHECK_PASS");
+    }
+
+    private static void metricEncodingCheck(File directory) throws Exception {
+        CaptureProgress progress = new CaptureProgress();
+        long readAt = System.nanoTime();
+        progress.observeRead(readAt, 4);
+        long sentAt = Math.max(readAt, System.nanoTime());
+        progress.observeSend(sentAt, true);
+        EngineStatus status = new EngineStatus(directory,
+                "0123456789abcdef0123456789abcdef", 2000, 4321, progress);
+        status.update("SENDING");
+        String line = new String(Files.readAllBytes(
+                new File(directory, "engine-state.txt").toPath()), StandardCharsets.UTF_8);
+        if (!line.matches("run=0123456789abcdef0123456789abcdef uid=2000 pid=4321 "
+                + "state=SENDING v=2 frames_read=4 sent=1 dropped=0 observed_ns=[0-9]+ "
+                + "last_read_ns=[0-9]+ last_send_ns=[0-9]+ message=none\\n")
+                || line.getBytes(StandardCharsets.UTF_8).length > 1024) {
+            throw new AssertionError("Capture metrics were not encoded in bounded v2 status: " + line);
+        }
     }
 
     private static void gateCheck(File directory) throws Exception {
@@ -238,7 +262,8 @@ public final class AppAwareHarness {
             }
             AudioEngine.publishFinalStatus(ownerLease, oldRun, new IOException("fixture failure"));
             String error = new String(Files.readAllBytes(statePath), StandardCharsets.UTF_8);
-            if (!error.contains("state=ERROR message=fixture failure\n") || !ownerLease.isValid()) {
+            if (!error.contains("state=ERROR v=2 frames_read=0 sent=0 dropped=0 observed_ns=")
+                    || !error.contains(" message=fixture failure\n") || !ownerLease.isValid()) {
                 throw new AssertionError("ERROR was not published while holding engine.lock");
             }
         } finally {

@@ -7,6 +7,7 @@ import android.os.Build;
 import android.os.Process;
 
 import java.io.File;
+import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.net.PortUnreachableException;
 import java.nio.ByteBuffer;
@@ -20,6 +21,12 @@ import java.util.concurrent.locks.LockSupport;
 public final class CaptureSender {
     private static final File DIRECTORY = new File("/data/local/tmp/vban-sender");
     private static final File STOP = new File(DIRECTORY, "stop");
+    private static final PacketWriter CHANNEL_WRITER = new PacketWriter() {
+        @Override
+        public int write(DatagramChannel channel, ByteBuffer packet) throws IOException {
+            return channel.write(packet);
+        }
+    };
 
     public static void main(String[] args) {
         try {
@@ -78,20 +85,49 @@ public final class CaptureSender {
     }
 
     private static void run(SenderConfig config, BooleanSupplier keepRunning) throws Exception {
-        runCapture(config, keepRunning, null, true);
+        runCapture(config, keepRunning, null, new CaptureProgress(), null, true, CHANNEL_WRITER);
     }
 
     static void runContinuous(OutputConfig config, BooleanSupplier keepRunning,
             RecordingStarted recordingStarted, boolean diagnostics) throws Exception {
-        runCapture(config, keepRunning, recordingStarted, diagnostics);
+        runCapture(config, keepRunning, recordingStarted, new CaptureProgress(), null, diagnostics,
+                CHANNEL_WRITER);
+    }
+
+    static void runContinuous(OutputConfig config, BooleanSupplier keepRunning,
+            RecordingStarted recordingStarted, CaptureProgress progress, ProgressListener listener)
+            throws Exception {
+        runContinuous(config, keepRunning, recordingStarted, progress, listener, false);
+    }
+
+    static void runContinuous(OutputConfig config, BooleanSupplier keepRunning,
+            RecordingStarted recordingStarted, CaptureProgress progress, ProgressListener listener,
+            boolean diagnostics) throws Exception {
+        runContinuous(config, keepRunning, recordingStarted, progress, listener, diagnostics,
+                CHANNEL_WRITER);
+    }
+
+    static void runContinuous(OutputConfig config, BooleanSupplier keepRunning,
+            RecordingStarted recordingStarted, CaptureProgress progress, ProgressListener listener,
+            boolean diagnostics, PacketWriter writer) throws Exception {
+        runCapture(config, keepRunning, recordingStarted, progress, listener, diagnostics, writer);
     }
 
     interface RecordingStarted {
         void onRecording() throws Exception;
     }
 
+    interface ProgressListener {
+        void onProgress() throws Exception;
+    }
+
+    interface PacketWriter {
+        int write(DatagramChannel channel, ByteBuffer packet) throws IOException;
+    }
+
     private static void runCapture(OutputConfig config, BooleanSupplier keepRunning,
-            RecordingStarted recordingStarted, boolean diagnostics) throws Exception {
+            RecordingStarted recordingStarted, CaptureProgress progress, ProgressListener listener,
+            boolean diagnostics, PacketWriter writer) throws Exception {
         if (!keepRunning.getAsBoolean()) {
             return;
         }
@@ -120,7 +156,8 @@ public final class CaptureSender {
         try (DatagramChannel channel = DatagramChannel.open()) {
             channel.connect(config.destination);
             channel.configureBlocking(false);
-            PacketOutput output = new PacketOutput(channel, config.stream, diagnostics);
+            PacketOutput output = new PacketOutput(channel, config.stream, diagnostics,
+                    progress, listener, writer);
             if (recorder.getSampleRate() != 48000 || recorder.getChannelCount() != 2
                     || recorder.getAudioFormat() != AudioFormat.ENCODING_PCM_16BIT) {
                 throw new IllegalStateException("Actual capture format differs from VBAN format");
@@ -145,7 +182,12 @@ public final class CaptureSender {
             while (keepRunning.getAsBoolean()) {
                 long readStarted = diagnostics ? System.nanoTime() : 0;
                 int read = recorder.read(pcm, 0, pcm.length, AudioRecord.READ_NON_BLOCKING);
-                if (diagnostics) output.observeRead(readStarted, System.nanoTime(), read);
+                long readFinished = System.nanoTime();
+                if (diagnostics) output.observeRead(readStarted, readFinished, read);
+                progress.observeRead(readFinished,
+                        read > 0 && read % VbanPacket.FRAME_BYTES == 0
+                                ? read / VbanPacket.FRAME_BYTES : 0);
+                if (listener != null) listener.onProgress();
                 if (read == AudioRecord.ERROR_DEAD_OBJECT) {
                     throw new CaptureRestartException();
                 }
@@ -173,6 +215,9 @@ public final class CaptureSender {
         private final DatagramChannel channel;
         private final VbanPacket encoder;
         private final boolean reportStatistics;
+        private final CaptureProgress progress;
+        private final ProgressListener listener;
+        private final PacketWriter writer;
         private long sent;
         private long dropped;
         private long frames;
@@ -187,9 +232,17 @@ public final class CaptureSender {
         private int captureBufferFrames;
 
         PacketOutput(DatagramChannel channel, String stream, boolean reportStatistics) {
+            this(channel, stream, reportStatistics, new CaptureProgress(), null, CHANNEL_WRITER);
+        }
+
+        PacketOutput(DatagramChannel channel, String stream, boolean reportStatistics,
+                CaptureProgress progress, ProgressListener listener, PacketWriter writer) {
             this.channel = channel;
             this.encoder = new VbanPacket(stream);
             this.reportStatistics = reportStatistics;
+            this.progress = progress;
+            this.listener = listener;
+            this.writer = writer;
         }
 
         @Override
@@ -205,7 +258,7 @@ public final class CaptureSender {
             int size = packet.remaining();
             int written;
             try {
-                written = channel.write(packet);
+                written = writer.write(channel, packet);
             } catch (PortUnreachableException unavailable) {
                 // A temporary receiver outage loses this packet, not the capture session.
                 written = 0;
@@ -213,6 +266,8 @@ public final class CaptureSender {
             if (written != size && written != 0) {
                 throw new IllegalStateException("Partial UDP datagram");
             }
+            progress.observeSend(System.nanoTime(), written == size);
+            if (listener != null) listener.onProgress();
             if (reportStatistics) {
                 if (written == size) {
                     sent++;

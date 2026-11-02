@@ -60,7 +60,8 @@ PID, state, and error; this live status does not force a physical storage sync.
 The audio loop checks run/stop files at most once per 5 ms, and an observed
 cancellation is final for that run. Startup still validates the marker directly.
 OFF confirms own-process exit and restores the saved surround
-setting. Boot and reopening the UI also reconcile interrupted cleanup.
+setting. One monotonic 30-second budget covers Stop's ADB commands and polling;
+each command is limited by the remaining budget. Timeout preserves cleanup state. Boot and reopening the UI also reconcile interrupted cleanup.
 Failures remain visible without a restart loop.
 
 One routing loop supports finite probes and continuous operation. Packet pacing
@@ -81,8 +82,11 @@ The service checks engine status every 15 seconds on the Start/Stop worker and
 when the app is reopened. Checks report failures without restarting a failed engine;
 a successful check clears a temporary status-read error.
 The UI saves the requested choice; controller callbacks publish progress and errors.
-Toggle intents carry their own ON/OFF value so delayed dispatch cannot lose an OFF
-cancellation fence. Service shutdown requires current confirmed cleanup and an
+OFF acceptance atomically saves a unique pending token before service dispatch.
+Intents only wake reconciliation of the latest persisted choice. Successful Stop
+acknowledges only its captured token; newer OFF obligations survive. An incomplete
+Stop retains ownership and requires a fresh explicit OFF to retry in the same controller.
+Legacy incomplete cleanup is reconciled conservatively before explicit OFF/ON retry. Service shutdown requires current confirmed cleanup and an
 accepted `stopSelfResult`, rather than an earlier OFF callback.
 Every delivered OFF leaves a cleanup obligation before the next ON, including
 during health checks and service replacement. Complete backend jobs share one
@@ -139,13 +143,27 @@ No sequence gaps do not prove that Android capture lost no samples.
 With the APK OFF and the expected app playing, `tools/measure-engine.py` runs
 the exact supplied measurement JAR for a finite duration. It validates the device
 copy, saves/restores the audio setting, removes its own marker and JAR, and checks
-its own STOPPED state and process exit. Keep each report in a new directory:
+its own STOPPED state and process exit. Before remote mutations it writes a durable
+local recovery report. Cleanup steps retain errors independently and permit one
+retry per invocation for idempotent work. Restoration requires a fenced startup
+and absence of capture engines; unrelated engines are never killed. Keep each
+report in a new directory:
 
 ```sh
 python3 tools/measure-engine.py --device "$BOX" --jar build/vban-engine.jar \
   --receiver-ip "$RECEIVER_IP" --app com.amazon.amazonvideo.livingroom \
   --seconds 60 --output build/device/prime-timing
 ```
+
+If cleanup was interrupted, reconnect the same device and resume only cleanup:
+
+```sh
+python3 tools/measure-engine.py --device "$BOX" \
+  --cleanup-report build/device/prime-timing/report.json
+```
+
+`CLEANUP_PENDING` retains unfinished steps, original settings, and primary/cleanup
+errors. A resumed report never launches capture. Success requires verified cleanup.
 
 The report distinguishes observed nonzero PCM from a silent capture session.
 Receiver packet delivery and a successful timing measurement do not establish
@@ -157,7 +175,15 @@ run marker, foreground policy and capture lock, and emits numeric capture
 statistics to stdout at most once per second plus a final summary. They include
 the actual capture-buffer size, maximum gap between read attempts, maximum read
 duration, and the startup status callback duration. Keep stdout outside Git.
-The APK's normal launch does not enable diagnostic sampling or logging.
+The APK's normal launch does not enable PCM amplitude sampling or stdout statistics.
+Normal engine status now includes bounded v2 counters (`frames_read`, `sent`,
+`dropped`) and monotonic observation/last-read/last-successful-send times. Counters
+span the entire engine run. State changes publish immediately; unchanged-state
+snapshots publish at most once per second from the existing loop, including IDLE.
+The reader accepts legacy status without metrics; v2 is limited to 1024 bytes.
+A successfully checked snapshot is cached every 15 seconds and shown in developer
+tools. Empty reads, silence and IDLE are neutral. Counters do not confirm receiver
+reception; no alarm, restart, or route change is inferred from absent data.
 Select OFF before a diagnostic engine and restore the original audio setting
 afterwards; never run two capture engines at once.
 

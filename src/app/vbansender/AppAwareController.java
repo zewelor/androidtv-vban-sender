@@ -10,6 +10,8 @@ final class AppAwareController {
 
     interface Status {
         void update(String state) throws Exception;
+
+        default void heartbeat(String state) throws Exception { }
     }
 
     static void run(ForegroundWatcher watcher, Capture capture, BooleanSupplier enabled,
@@ -71,6 +73,9 @@ final class AppAwareController {
                     state = "IDLE";
                 }
                 Thread.sleep(20);
+            }
+            if (state != null) {
+                status.heartbeat(state);
             }
         }
         watcher.checkFailure();

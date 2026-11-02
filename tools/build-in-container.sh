@@ -7,9 +7,14 @@ rm -rf build/classes build/test-classes build/dex
 mkdir -p build/classes build/test-classes build/dex
 find src vendor/adblib/src -name '*.java' | sort > build/sources.list
 javac -source 8 -target 8 -bootclasspath "$ANDROID_JAR" -d build/classes @build/sources.list
-javac --release 8 -cp build/classes -d build/test-classes tests/ProtocolCheck.java tests/RoutingCheck.java tests/AppAwareHarness.java tests/AdbClientCheck.java tests/AdbClientHarness.java tests/CapturePacketsHarness.java tests/AudioControllerCheck.java tests/UdpRecoveryCheck.java tests/EngineTimingHarness.java
+javac --release 8 -cp build/classes -d build/test-classes tests/ProtocolCheck.java tests/RoutingCheck.java tests/AppAwareHarness.java tests/AdbClientCheck.java tests/AdbClientHarness.java tests/CapturePacketsHarness.java tests/AudioControllerCheck.java tests/UdpRecoveryCheck.java tests/EngineTimingHarness.java tests/EngineStateCheck.java
+java -cp build/classes:build/test-classes app.vbansender.app.EngineStateCheck
+mkdir -p build/capture-test-classes
+find tests/capture-stubs -name '*.java' > build/capture-stubs.list
+javac --release 8 -cp build/classes -d build/capture-test-classes @build/capture-stubs.list tests/CaptureSenderHarness.java
+java -cp build/capture-test-classes:build/classes app.vbansender.CaptureSenderHarness
 java -cp build/classes:build/test-classes app.vbansender.ProtocolCheck
-java -cp build/classes:build/test-classes app.vbansender.UdpRecoveryCheck
+java -cp build/capture-test-classes:build/classes:build/test-classes app.vbansender.UdpRecoveryCheck
 java -cp build/classes:build/test-classes app.vbansender.RoutingCheck
 java -cp build/classes:build/test-classes com.cgutman.adblib.AdbClientCheck
 java -cp build/classes:build/test-classes app.vbansender.app.AudioControllerCheck
@@ -26,6 +31,7 @@ python3 tests/e2e.py
 python3 tests/app-aware-e2e.py
 python3 tests/service-e2e.py
 python3 tests/backend-e2e.py
+python3 tests/durable-control-e2e.py
 python3 tests/adb-e2e.py
 python3 tests/pacing-e2e.py
 python3 tests/boot-probe-e2e.py

@@ -113,7 +113,7 @@ public final class MainActivity extends Activity {
         } else if (!AppConfig.configured(this)) {
             status.setText("Open Settings to configure the receiver and local ADB.");
         } else {
-            status.setText(enabled ? "Audio via VBAN"
+            status.setText(enabled ? "Automatic audio routing enabled"
                     : "Audio via standard output");
         }
     }

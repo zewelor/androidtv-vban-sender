@@ -34,7 +34,9 @@ public final class AudioEngine {
                 if (lock == null) {
                     throw new IllegalStateException("An audio engine or finite capture sender is already running");
                 }
-                EngineStatus status = new EngineStatus(DIRECTORY, args[4], Process.myUid(), Process.myPid());
+                CaptureProgress progress = new CaptureProgress();
+                EngineStatus status = new EngineStatus(DIRECTORY, args[4], Process.myUid(),
+                        Process.myPid(), progress);
                 EngineRunGate gate = new EngineRunGate(
                         new File(DIRECTORY, "enabled-" + args[4]), STOP);
                 try {
@@ -42,7 +44,7 @@ public final class AudioEngine {
                         return;
                     }
                     status.update("IDLE");
-                    runController(config, gate, status, measurementSeconds);
+                    runController(config, gate, status, progress, measurementSeconds);
                     publishFinalStatus(lock, status, null);
                 } catch (Exception error) {
                     try {
@@ -73,7 +75,7 @@ public final class AudioEngine {
     }
 
     private static void runController(OutputConfig config, EngineRunGate gate,
-            EngineStatus status, int measurementSeconds) throws Exception {
+            EngineStatus status, CaptureProgress progress, int measurementSeconds) throws Exception {
         final boolean measuring = measurementSeconds != 0;
         final long deadline = System.nanoTime() + measurementSeconds * 1000000000L;
         try (ForegroundWatcher watcher = new ForegroundWatcher()) {
@@ -87,6 +89,11 @@ public final class AudioEngine {
                                 public void onRecording() throws Exception {
                                     status.update("SENDING");
                                 }
+                            }, progress, new CaptureSender.ProgressListener() {
+                                @Override
+                                public void onProgress() throws Exception {
+                                    status.heartbeat("SENDING");
+                                }
                             }, measuring);
                 }
             }, new BooleanSupplier() {
@@ -98,6 +105,11 @@ public final class AudioEngine {
                 @Override
                 public void update(String state) throws Exception {
                     status.update(state);
+                }
+
+                @Override
+                public void heartbeat(String state) throws Exception {
+                    status.heartbeat(state);
                 }
             });
         }

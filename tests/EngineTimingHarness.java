@@ -95,11 +95,12 @@ public final class EngineTimingHarness {
         long[] writes = new long[500];
         for (int i = 0; i < writes.length; i++) {
             long before = System.nanoTime();
-            status.update("SENDING");
+            status.update(i % 2 == 0 ? "SENDING" : "IDLE");
             writes[i] = System.nanoTime() - before;
             String line = new String(Files.readAllBytes(
                     new File(directory, "engine-state.txt").toPath()), StandardCharsets.UTF_8);
-            require(line.endsWith("state=SENDING message=none\n"), "Status was not readable");
+            require(line.contains(" v=2 frames_read=0 sent=0 dropped=0 observed_ns=")
+                    && line.endsWith("message=none\n"), "Status was not readable");
         }
         Arrays.sort(writes);
         System.out.println("{\"gate_calls\":200000,\"marker_probes\":" + marker.probes

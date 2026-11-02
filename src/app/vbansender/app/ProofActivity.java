@@ -2,6 +2,8 @@ package app.vbansender.app;
 
 import android.app.Activity;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.content.SharedPreferences;
 import android.content.Intent;
 import android.util.Log;
@@ -14,9 +16,18 @@ import app.vbansender.Heartbeat;
 /** Phase 0 self-ADB proof, audio-free screen for local ADB and a finite boot proof. */
 public final class ProofActivity extends Activity {
     private TextView status;
+    private TextView engineSnapshot;
     private Button test;
     private Button boot;
     private static final String TAG = "VBAN-PROOF";
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private final Runnable refreshEngineSnapshot = new Runnable() {
+        @Override
+        public void run() {
+            updateEngineSnapshot();
+            main.postDelayed(this, 1000);
+        }
+    };
 
     @Override
     public void onCreate(Bundle state) {
@@ -32,6 +43,9 @@ public final class ProofActivity extends Activity {
         status.setTextSize(19);
         status.setText("Check local ADB and a separate test process. Audio output is unchanged.");
         layout.addView(status);
+        engineSnapshot = new TextView(this);
+        engineSnapshot.setTextSize(16);
+        layout.addView(engineSnapshot);
         test = new Button(this);
         updateTestButton();
         test.setOnClickListener(new View.OnClickListener() {
@@ -96,7 +110,57 @@ public final class ProofActivity extends Activity {
         if (!previous.isEmpty()) {
             status.setText(previous);
         }
+        updateEngineSnapshot();
+        main.removeCallbacks(refreshEngineSnapshot);
+        main.postDelayed(refreshEngineSnapshot, 1000);
         updateBootButton();
+    }
+
+    @Override
+    public void onPause() {
+        main.removeCallbacks(refreshEngineSnapshot);
+        super.onPause();
+    }
+
+    private void updateEngineSnapshot() {
+        String raw = getSharedPreferences("vban", MODE_PRIVATE).getString("engine_snapshot", "");
+        try {
+            EngineState snapshot = EngineState.parse(raw);
+            engineSnapshot.setText(formatEngineSnapshot(snapshot));
+        } catch (IllegalStateException invalid) {
+            engineSnapshot.setText("Engine snapshot unavailable: invalid status.");
+        }
+    }
+
+    static String formatEngineSnapshot(EngineState snapshot) {
+        if (snapshot == null) {
+            return "Engine snapshot: no status observed yet.";
+        }
+        StringBuilder text = new StringBuilder("Engine snapshot: ").append(snapshot.state);
+        if ("IDLE".equals(snapshot.state)) {
+            text.append(" (idle; neutral)");
+        }
+        if (!snapshot.metricsAvailable) {
+            return text.append("\nCapture telemetry unavailable (legacy status).").toString();
+        }
+        text.append("\nFrames read: ").append(snapshot.framesRead)
+                .append("   Packets sent: ").append(snapshot.sent)
+                .append("   Dropped: ").append(snapshot.dropped)
+                .append("\nStatus observed: ").append(age(snapshot.observedNanos));
+        if (snapshot.framesRead == 0) {
+            text.append("\nNo audio frames observed yet (neutral).");
+        } else {
+            long lastProgress = Math.max(snapshot.lastReadNanos, snapshot.lastSendNanos);
+            text.append("\nLast audio progress: ").append(age(lastProgress));
+        }
+        return text.toString();
+    }
+
+    private static String age(long timestampNanos) {
+        if (timestampNanos <= 0) return "not available";
+        long elapsed = System.nanoTime() - timestampNanos;
+        if (elapsed < 0) return "not available";
+        return (elapsed / 1000000000L) + " s ago";
     }
 
     private void updateBootButton() {

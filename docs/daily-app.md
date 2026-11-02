@@ -75,3 +75,9 @@ Then open VBAN and select OFF to restore the audio setting.
 On the tested Android 12 firmware, virtual audio capture coincided with repeated
 Android TV Remote Service crashes. Network remote controls may become unavailable;
 the packet-pacing fix does not resolve that separate compatibility issue.
+
+Developer tools show the last checked engine snapshot, read frames, sent/dropped
+packets, and time since audio progress. Silent PCM counts as read data. No data or
+IDLE is neutral; these values do not confirm playback or receiver reception.
+Stop has a 30-second command/polling budget. If it fails, ownership and saved audio
+settings are retained; select OFF again to explicitly retry cleanup.
