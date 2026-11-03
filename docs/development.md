@@ -50,7 +50,7 @@ ADB carries control commands only. No root, receiver-side service, wake lock,
 watchdog, or recording of captured content is required.
 
 A local foreground observer allows capture after one second of stable recognition
-of SmartTube, stock YouTube, or Prime. Netflix, sleeping state, and unknown/stale
+of SmartTube, stock YouTube, Prime, or Wholphin. Netflix, sleeping state, and unknown/stale
 observations prevent capture. Detection can occur after a player creates AudioTrack,
 so seamless app transitions are not guaranteed.
 

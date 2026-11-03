@@ -18,6 +18,11 @@ public final class RoutingCheck {
         now += 1000000002L;
         policy.observe("com.amazon.amazonvideo.livingroom", now);
         require(policy.captureAllowed(now), "stable Prime must allow capture");
+        policy.observe("com.github.damontecres.wholphin", now + 1);
+        require(!policy.captureAllowed(now + 1), "Wholphin needs its own stable observation");
+        now += 1000000001L;
+        policy.observe("com.github.damontecres.wholphin", now);
+        require(policy.captureAllowed(now), "stable Wholphin must allow capture");
         require(!policy.captureAllowed(now + 1500000001L), "stale detection must stop capture");
         policy.observe(null, now + 1500000002L);
         require(!policy.captureAllowed(now + 1500000002L), "unknown foreground must stop");

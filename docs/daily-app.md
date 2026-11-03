@@ -41,7 +41,7 @@ keeps VBAN enabled; the choice is saved for the next reboot.
 | Choice | Foreground app | Audio route |
 |---|---|---|
 | OFF | Any | Standard Android output |
-| ON | SmartTube / YouTube / Prime | VBAN after stable recognition |
+| ON | SmartTube / YouTube / Prime / Wholphin | VBAN after stable recognition |
 | ON | Netflix / Home / unsupported or unknown app | Standard Android output |
 
 Netflix is bypassed as soon as the app is foreground, including its menus or

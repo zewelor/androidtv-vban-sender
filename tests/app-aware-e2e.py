@@ -16,6 +16,7 @@ JAVA = ["java", "-cp", str(ROOT / "build/classes") + ":" + str(ROOT / "build/tes
         "app.vbansender.AppAwareHarness"]
 YOUTUBE = "org.smarttube.stable"
 PRIME = "com.amazon.amazonvideo.livingroom"
+WHOLPHIN = "com.github.damontecres.wholphin"
 NETFLIX = "com.netflix.ninja"
 
 
@@ -128,6 +129,14 @@ def transitions():
         changed = trial.change(dump(NETFLIX))
         released = trial.wait("SESSION_RELEASED", changed)
         assert released - changed < 1, "Netflix stop reaction too slow on synthetic fixture"
+        trial.quiet()
+        changed = trial.change(dump(WHOLPHIN))
+        trial.wait("SESSION_STARTED", changed)
+        before = trial.packets
+        trial.pump(.15)
+        assert trial.packets > before, "Wholphin must send audio after stable recognition"
+        changed = trial.change(dump(NETFLIX))
+        trial.wait("SESSION_RELEASED", changed)
         trial.quiet()
         changed = trial.change(dump(PRIME))
         trial.wait("SESSION_STARTED", changed)
