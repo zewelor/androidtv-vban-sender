@@ -4,8 +4,8 @@ Stream Android TV audio directly to an existing VBAN receiver over UDP:
 48 kHz, stereo, 16-bit PCM.
 
 - One large **ON/OFF** button, a remembered choice, and startup after reboot.
-- SmartTube, YouTube, Prime, and Wholphin use VBAN when enabled.
-- Netflix and unsupported apps keep the standard audio output.
+- All recognized foreground apps use VBAN when enabled, except Netflix.
+- Netflix keeps the standard audio output.
 - Configure the receiver address once in **Settings**. No receiver discovery.
 
 Requires Android 12+ and authorized classic ADB on the device's TCP port `5555`.

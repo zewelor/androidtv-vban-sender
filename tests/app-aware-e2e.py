@@ -122,7 +122,7 @@ def transitions():
     try:
         trial.wait("FOREGROUND " + NETFLIX)
         trial.quiet()
-        changed = trial.change(dump(YOUTUBE))
+        changed = trial.change(dump("com.example.newplayer"))
         trial.wait("SESSION_STARTED", changed)
         trial.pump(.15)
         assert trial.packets > 0
@@ -147,6 +147,12 @@ def transitions():
         changed = trial.change("background process com.netflix.ninja\n" + dump(YOUTUBE))
         trial.wait("SESSION_STARTED", changed)
         changed = trial.change(dump("com.vendor.launcher"))
+        trial.wait("SESSION_RELEASED", changed)
+        trial.wait("SESSION_STARTED", changed)
+        before = trial.packets
+        trial.pump(.15)
+        assert trial.packets > before, "launcher audio is not excluded"
+        changed = trial.change("mResumedActivity: null\n")
         trial.wait("SESSION_RELEASED", changed)
         trial.quiet()
         # Stop during a pending restart must cancel it, even when another allowed app appears.

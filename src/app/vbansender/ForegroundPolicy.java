@@ -3,7 +3,7 @@ package app.vbansender;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Fail closed; only explicitly supported media applications may take over the audio route. */
+/** Capture recognized foreground apps except Netflix; fail closed on missing or stale observations. */
 final class ForegroundPolicy {
     private static final Pattern RESUMED = Pattern.compile(
             "(?m)^\\s*mResumedActivity:\\s*ActivityRecord\\{[^\\r\\n]*?\\bu0\\s+([A-Za-z0-9_.]+)/");
@@ -38,11 +38,8 @@ final class ForegroundPolicy {
     }
 
     synchronized boolean captureAllowed(long now) {
-        boolean supported = "com.google.android.youtube.tv".equals(application)
-                || "org.smarttube.stable".equals(application)
-                || "com.amazon.amazonvideo.livingroom".equals(application)
-                || "com.github.damontecres.wholphin".equals(application);
-        return supported && now - stableSince >= 1000000000L
+        return application != null && !"com.netflix.ninja".equals(application)
+                && now - stableSince >= 1000000000L
                 && now - observedAt <= 1500000000L;
     }
 }

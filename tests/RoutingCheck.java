@@ -27,12 +27,20 @@ public final class RoutingCheck {
         policy.observe(null, now + 1500000002L);
         require(!policy.captureAllowed(now + 1500000002L), "unknown foreground must stop");
         policy.observe("com.vendor.launcher", now + 1500000003L);
-        require(!policy.captureAllowed(now + 2500000003L), "launcher must keep normal audio");
-        policy.observe("org.smarttube.stable", now + 3000000000L);
-        policy.observe("org.smarttube.stable", now + 4000000000L);
-        require(policy.captureAllowed(now + 4000000000L), "installed SmartTube must allow capture");
+        require(policy.captureAllowed(now + 2500000003L), "stable launcher is not excluded");
+        policy.observe("com.example.newplayer", now + 2500000004L);
+        require(!policy.captureAllowed(now + 2500000004L), "new app needs stable recognition");
+        policy.observe("com.example.newplayer", now + 3500000004L);
+        require(policy.captureAllowed(now + 3500000004L), "unlisted apps must allow capture");
+        policy.observe("com.netflix.ninja", now + 3500000005L);
+        require(!policy.captureAllowed(now + 3500000005L), "Netflix must stop an unlisted app immediately");
+        policy.observe("com.netflix.ninja", now + 4500000005L);
+        require(!policy.captureAllowed(now + 4500000005L), "stable Netflix must remain excluded");
+        policy.observe("org.smarttube.stable", now + 5000000000L);
         policy.observe("org.smarttube.stable", now + 6000000000L);
-        require(!policy.captureAllowed(now + 6000000000L), "fresh observation after a gap needs stability again");
+        require(policy.captureAllowed(now + 6000000000L), "installed SmartTube must allow capture");
+        policy.observe("org.smarttube.stable", now + 8000000000L);
+        require(!policy.captureAllowed(now + 8000000000L), "fresh observation after a gap needs stability again");
 
         String netflix = "mResumedActivity: ActivityRecord{a u0 com.netflix.ninja/.MainActivity t1}";
         String youtube = "mResumedActivity: ActivityRecord{b u0 com.google.android.youtube.tv/MainActivity t2}";

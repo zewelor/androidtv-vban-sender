@@ -41,12 +41,14 @@ keeps VBAN enabled; the choice is saved for the next reboot.
 | Choice | Foreground app | Audio route |
 |---|---|---|
 | OFF | Any | Standard Android output |
-| ON | SmartTube / YouTube / Prime / Wholphin | VBAN after stable recognition |
-| ON | Netflix / Home / unsupported or unknown app | Standard Android output |
+| ON | Any recognized app except Netflix, including Home | VBAN after stable recognition |
+| ON | Netflix / sleeping / unknown app | Standard Android output |
 
 Netflix is bypassed as soon as the app is foreground, including its menus or
 paused playback. Your ON choice remains saved. ON does not confirm reception:
 there is no receiver discovery or automatic fallback when the receiver goes offline.
+Other apps need no individual registration. Their capture compatibility still depends
+on the playback app and device firmware.
 
 ON selects stereo PCM, required by the tested Prime capture path. This also
 affects HDMI while Netflix is bypassed. OFF restores the exact previous audio

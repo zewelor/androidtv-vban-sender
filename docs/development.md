@@ -50,7 +50,8 @@ ADB carries control commands only. No root, receiver-side service, wake lock,
 watchdog, or recording of captured content is required.
 
 A local foreground observer allows capture after one second of stable recognition
-of SmartTube, stock YouTube, Prime, or Wholphin. Netflix, sleeping state, and unknown/stale
+of any foreground package except Netflix (`com.netflix.ninja`), including the launcher.
+Netflix, sleeping state, and unknown/stale
 observations prevent capture. Detection can occur after a player creates AudioTrack,
 so seamless app transitions are not guaranteed.
 
@@ -73,7 +74,7 @@ application queue. The capture buffer is twice the platform minimum, with
 a minimum of one read block. Normal operation skips diagnostic sample statistics.
 Temporary UDP port-unreachable notifications discard packets without stopping capture;
 unexpected socket and capture failures remain visible. Lost audio is not replayed.
-A foreground-detection timeout releases capture and retries; a fresh supported-app
+A foreground-detection timeout releases capture and retries; a fresh non-excluded app
 observation must become stable before capture resumes. Permission errors remain fatal.
 `AudioRecord.ERROR_DEAD_OBJECT` releases and recreates the recorder after a cancellable
 one-second delay, with at most three retries when failures recur within ten seconds.
