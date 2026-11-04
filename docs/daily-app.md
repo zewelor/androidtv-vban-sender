@@ -41,18 +41,23 @@ keeps VBAN enabled; the choice is saved for the next reboot.
 | Choice | Foreground app | Audio route |
 |---|---|---|
 | OFF | Any | Standard Android output |
-| ON | Any recognized app except Netflix, including Home | VBAN after stable recognition |
-| ON | Netflix / sleeping / unknown app | Standard Android output |
+| ON | Any recognized app except Netflix and Home | VBAN after stable recognition |
+| ON | Netflix / Home / sleeping / unknown app | Standard Android output |
 
 Netflix is bypassed as soon as the app is foreground, including its menus or
 paused playback. Your ON choice remains saved. ON does not confirm reception:
 there is no receiver discovery or automatic fallback when the receiver goes offline.
 Other apps need no individual registration. Their capture compatibility still depends
 on the playback app and device firmware.
+Home is resolved from Android's default launcher when the engine starts; its package
+name is not hardcoded. After changing the default launcher, switch OFF → ON to refresh it.
+If Home detection fails, the engine reports an error and does not start capture.
 
-ON selects stereo PCM, required by the tested Prime capture path. This also
-affects HDMI while Netflix is bypassed. OFF restores the exact previous audio
-setting. Receiver settings become editable after OFF is confirmed.
+ON sets Android's encoded surround output mode to **Never**, as required by the
+tested Prime capture path. Player and firmware behavior can differ; see the
+known app quirks below. This also affects HDMI while Netflix is bypassed. OFF
+restores the exact previous audio setting. Receiver settings become editable
+after OFF is confirmed.
 
 ## Troubleshooting
 
@@ -83,3 +88,22 @@ packets, and time since audio progress. Silent PCM counts as read data. No data 
 IDLE is neutral; these values do not confirm playback or receiver reception.
 Stop has a 30-second command/polling budget. If it fails, ownership and saved audio
 settings are retained; select OFF again to explicitly retry cleanup.
+
+### Known app quirks
+
+#### Wholphin: AC3 playback fails during VBAN capture
+
+If playback already works with VBAN on, keep your decoder settings. On one
+MEOBox 4K DV8985 (Android 12, Wholphin 1.0.9), an AC3 5.1 film played with
+VBAN off but failed during capture. Logs showed capture routing to
+`REMOTE_SUBMIX` (PCM 16-bit, 48 kHz stereo) while the player requested direct
+AC3 output. Changing only **Use FFmpeg decoder module → Prefer to use FFmpeg
+over built-in decoders** made the film play with VBAN on; AC3 support stayed
+enabled and downmix stayed disabled. The receiver measured non-zero PCM.
+
+If you get this error, try Prefer FFmpeg, then reopen the film. The option is
+under **Advanced Settings → Playback Backend**. This result is specific to the
+tested setup; it does not prove a hardware decoder fault or identify the exact
+audio decoder instance Wholphin used. Video decoder settings were not changed.
+
+See [Wholphin's audio settings](https://github.com/damontecres/Wholphin/wiki/App-Settings).

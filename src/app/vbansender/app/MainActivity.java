@@ -87,7 +87,7 @@ public final class MainActivity extends Activity {
             }
         });
         TextView note = new TextView(this);
-        note.setText("Netflix uses standard output due to capture issues.");
+        note.setText("Netflix and Home use standard output.");
         note.setTextSize(18);
         note.setTextColor(Color.rgb(170, 180, 190));
         note.setGravity(Gravity.CENTER);

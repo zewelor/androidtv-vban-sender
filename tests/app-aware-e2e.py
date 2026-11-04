@@ -18,6 +18,7 @@ YOUTUBE = "org.smarttube.stable"
 PRIME = "com.amazon.amazonvideo.livingroom"
 WHOLPHIN = "com.github.damontecres.wholphin"
 NETFLIX = "com.netflix.ninja"
+HOME = "com.example.home"
 
 
 def dump(package):
@@ -25,7 +26,7 @@ def dump(package):
 
 
 class Trial:
-    def __init__(self, name, initial, seconds=15, continuous=False, marker=True):
+    def __init__(self, name, initial, seconds=15, continuous=False, marker=True, home=HOME):
         self.directory = OUTPUT / name
         self.directory.mkdir(parents=True, exist_ok=True)
         self.foreground = self.directory / "foreground.txt"
@@ -49,6 +50,7 @@ class Trial:
         self.stderr_path = self.directory / "stderr.log"
         self.stderr = self.stderr_path.open("w")
         env = dict(os.environ, VBAN_SENDER_TEST_FOREGROUND=str(self.foreground),
+                   VBAN_SENDER_TEST_HOME=home,
                    VBAN_SENDER_TEST_CAPTURE=str(self.capture_fault),
                    PATH=str(OUTPUT / "bin") + os.pathsep + os.environ["PATH"])
         command = [str(self.receiver.getsockname()[1]), "continuous", str(self.marker),
@@ -118,7 +120,7 @@ class Trial:
 
 
 def transitions():
-    trial = Trial("transitions", dump(NETFLIX))
+    trial = Trial("transitions", dump(NETFLIX), seconds=20)
     try:
         trial.wait("FOREGROUND " + NETFLIX)
         trial.quiet()
@@ -146,12 +148,11 @@ def transitions():
         # A Netflix process remaining in the background does not disable foreground YouTube.
         changed = trial.change("background process com.netflix.ninja\n" + dump(YOUTUBE))
         trial.wait("SESSION_STARTED", changed)
-        changed = trial.change(dump("com.vendor.launcher"))
+        changed = trial.change(dump(HOME))
         trial.wait("SESSION_RELEASED", changed)
+        trial.quiet(1.3)
+        changed = trial.change(dump("com.example.newplayer"))
         trial.wait("SESSION_STARTED", changed)
-        before = trial.packets
-        trial.pump(.15)
-        assert trial.packets > before, "launcher audio is not excluded"
         changed = trial.change("mResumedActivity: null\n")
         trial.wait("SESSION_RELEASED", changed)
         trial.quiet()
@@ -332,6 +333,49 @@ def deadline():
         trial.close()
 
 
+def resolved_home():
+    alternate = "org.example.alternatehome"
+    trial = Trial("resolved-home", dump(alternate), home=alternate)
+    try:
+        trial.wait("HOME " + alternate)
+        trial.wait("FOREGROUND " + alternate)
+        trial.quiet(1.3)
+        changed = trial.change(dump(HOME))
+        trial.wait("SESSION_STARTED", changed)
+        trial.pump(.15)
+        assert trial.packets > 0, "a different launcher package must not be hardcoded"
+        changed = trial.change(dump(alternate))
+        trial.wait("SESSION_RELEASED", changed)
+        trial.quiet(1.3)
+        trial.stop.touch()
+        return trial.finish()
+    finally:
+        trial.close()
+
+
+def home_failure(value):
+    trial = Trial("home-" + value.lower().replace(" ", "-"), dump(YOUTUBE), home=value)
+    try:
+        report = trial.finish(expected=1)
+        assert trial.packets == 0, "failed Home detection must prevent capture"
+        assert "Home" in trial.stderr_path.read_text()
+        return report
+    finally:
+        trial.close()
+
+
+def stop_during_home_detection():
+    trial = Trial("stop-during-home-detection", dump(YOUTUBE), continuous=True, home="STALL")
+    try:
+        trial.pump(.25)
+        trial.marker.unlink()
+        report = trial.finish()
+        assert trial.packets == 0, "Stop during Home resolution must prevent capture"
+        return report
+    finally:
+        trial.close()
+
+
 def main():
     directory = OUTPUT / "bin"
     directory.mkdir(parents=True, exist_ok=True)
@@ -351,6 +395,20 @@ if text=='STALL':
 print(text)
 """)
     fake.chmod(0o700)
+    command = directory / "cmd"
+    command.write_text("""#!/usr/bin/env python3
+import os,sys,time
+assert sys.argv[1:] == ['package', 'resolve-activity', '--components', '--user', 'current',
+                       '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.HOME']
+home=os.environ['VBAN_SENDER_TEST_HOME']
+if home=='STALL':
+    time.sleep(10)
+if home=='ERROR':
+    print('Permission Denial',file=sys.stderr)
+    sys.exit(7)
+print(home if home=='No activity found' else home+'/.MainActivity')
+""")
+    command.chmod(0o700)
     status_directory = OUTPUT / "status-check"
     status_directory.mkdir(parents=True, exist_ok=True)
     # Concurrent reads of 2000 status replacements test atomic publication.
@@ -358,7 +416,11 @@ print(text)
                             capture_output=True, text=True, timeout=30)
     assert status.returncode == 0 and "STATUS_CHECK_PASS" in status.stdout, \
         (status.stdout, status.stderr)
-    results = {"transitions": transitions(), "sleep_gate": sleep_gate(),
+    results = {"transitions": transitions(), "resolved_home": resolved_home(),
+               "home_invalid": home_failure("No activity found"),
+               "home_error": home_failure("ERROR"), "home_timeout": home_failure("STALL"),
+               "stop_during_home_detection": stop_during_home_detection(),
+               "sleep_gate": sleep_gate(),
                "canceled_before_start": canceled_before_start(),
                "marker_stops_sending": marker_stops_sending(),
                "marker_stops_idle": marker_stops_idle(), "detector_failure": failure(),

@@ -4,13 +4,15 @@ Stream Android TV audio directly to an existing VBAN receiver over UDP:
 48 kHz, stereo, 16-bit PCM.
 
 - One large **ON/OFF** button, a remembered choice, and startup after reboot.
-- All recognized foreground apps use VBAN when enabled, except Netflix.
-- Netflix keeps the standard audio output.
+- All recognized foreground apps use VBAN when enabled, except Netflix and Home.
+- Netflix and the system's default Home app keep the standard audio output.
 - Configure the receiver address once in **Settings**. No receiver discovery.
 
 Requires Android 12+ and authorized classic ADB on the device's TCP port `5555`.
 Capture compatibility depends on the device firmware and playback app;
 this is an experimental transmitter.
+See [known app quirks](docs/daily-app.md#known-app-quirks) if a player fails
+when capture is enabled.
 
 [Setup and usage](docs/daily-app.md) ·
 [Development](docs/development.md)

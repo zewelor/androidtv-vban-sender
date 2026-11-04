@@ -78,7 +78,7 @@ public final class SettingsActivity extends Activity {
         layout.addView(developer);
         TextView audio = new TextView(this);
         audio.setText("ON uses stereo PCM. OFF restores your standard audio setting.\n"
-                + "Netflix uses standard output. Receiver discovery is not used.");
+                + "Netflix and Home use standard output. Receiver discovery is not used.");
         audio.setTextSize(18);
         layout.addView(audio);
         scroll.addView(layout);

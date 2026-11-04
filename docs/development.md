@@ -50,8 +50,11 @@ ADB carries control commands only. No root, receiver-side service, wake lock,
 watchdog, or recording of captured content is required.
 
 A local foreground observer allows capture after one second of stable recognition
-of any foreground package except Netflix (`com.netflix.ninja`), including the launcher.
-Netflix, sleeping state, and unknown/stale
+of any foreground package except Netflix (`com.netflix.ninja`) and the default Home.
+At engine startup, `cmd package resolve-activity --components --user current` resolves
+`ACTION_MAIN` + `CATEGORY_HOME` with a two-second timeout. Invalid responses are fatal;
+OFF → ON refreshes the resolved package after a launcher change.
+Netflix, Home, sleeping state, and unknown/stale
 observations prevent capture. Detection can occur after a player creates AudioTrack,
 so seamless app transitions are not guaranteed.
 

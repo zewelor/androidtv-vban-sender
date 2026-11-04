@@ -4,10 +4,11 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.TimeUnit;
 
 /** Runs on the box, outside the PCM loop; no laptop or receiver supervisor. */
 final class ForegroundWatcher implements AutoCloseable {
-    private final ForegroundPolicy policy = new ForegroundPolicy();
+    private volatile ForegroundPolicy policy;
     private final Thread thread = new Thread(new Runnable() {
         @Override
         public void run() {
@@ -23,7 +24,9 @@ final class ForegroundWatcher implements AutoCloseable {
     }
 
     boolean captureAllowed() {
-        return !closed && failure == null && policy.captureAllowed(System.nanoTime());
+        ForegroundPolicy current = policy;
+        return !closed && failure == null && current != null
+                && current.captureAllowed(System.nanoTime());
     }
 
     void checkFailure() throws Exception {
@@ -35,6 +38,9 @@ final class ForegroundWatcher implements AutoCloseable {
     private void watch() {
         String previous = "not-observed";
         try {
+            String home = resolveHome();
+            policy = new ForegroundPolicy(home);
+            System.out.println("HOME " + home);
             byte[] buffer = new byte[8192];
             ByteArrayOutputStream output = new ByteArrayOutputStream();
             while (!closed) {
@@ -84,9 +90,39 @@ final class ForegroundWatcher implements AutoCloseable {
         } catch (Exception error) {
             if (!closed) {
                 failure = error;
-                policy.observe(null, System.nanoTime());
+                if (policy != null) policy.observe(null, System.nanoTime());
                 System.err.println("DETECTION_ERROR: " + error);
             }
+        }
+    }
+
+    private String resolveHome() throws Exception {
+        Process current = new ProcessBuilder("cmd", "package", "resolve-activity", "--components",
+                "--user", "current", "-a", "android.intent.action.MAIN",
+                "-c", "android.intent.category.HOME").redirectErrorStream(true).start();
+        process = current;
+        try {
+            if (!current.waitFor(2, TimeUnit.SECONDS)) {
+                throw new IOException("Home detection timed out");
+            }
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            try (InputStream input = current.getInputStream()) {
+                byte[] buffer = new byte[1024];
+                int count;
+                while ((count = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, count);
+                    if (output.size() > 16384) throw new IOException("Home response exceeds 16 KiB");
+                }
+            }
+            String component = new String(output.toByteArray(), StandardCharsets.UTF_8).trim();
+            if (current.exitValue() != 0
+                    || !component.matches("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+/[A-Za-z0-9_.$]+")) {
+                throw new IOException("Invalid Home response (exit " + current.exitValue() + "): " + component);
+            }
+            return component.substring(0, component.indexOf('/'));
+        } finally {
+            current.destroy();
+            process = null;
         }
     }
 

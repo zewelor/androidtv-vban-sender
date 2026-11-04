@@ -3,7 +3,7 @@ package app.vbansender;
 /** Observable policy decisions, including ambiguous foreground and stale observations. */
 public final class RoutingCheck {
     public static void main(String[] args) {
-        ForegroundPolicy policy = new ForegroundPolicy();
+        ForegroundPolicy policy = new ForegroundPolicy("com.example.home");
         long now = 10000000000L;
         require(!policy.captureAllowed(now), "startup must keep normal audio");
         policy.observe("com.google.android.youtube.tv", now);
@@ -26,8 +26,9 @@ public final class RoutingCheck {
         require(!policy.captureAllowed(now + 1500000001L), "stale detection must stop capture");
         policy.observe(null, now + 1500000002L);
         require(!policy.captureAllowed(now + 1500000002L), "unknown foreground must stop");
-        policy.observe("com.vendor.launcher", now + 1500000003L);
-        require(policy.captureAllowed(now + 2500000003L), "stable launcher is not excluded");
+        policy.observe("com.example.home", now + 1500000003L);
+        require(!policy.captureAllowed(now + 1500000003L), "Home must stop capture immediately");
+        require(!policy.captureAllowed(now + 2500000003L), "stable Home must remain excluded");
         policy.observe("com.example.newplayer", now + 2500000004L);
         require(!policy.captureAllowed(now + 2500000004L), "new app needs stable recognition");
         policy.observe("com.example.newplayer", now + 3500000004L);

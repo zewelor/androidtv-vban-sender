@@ -62,7 +62,7 @@ public final class CaptureSender {
                 }
             };
             if (appAware) {
-                System.out.println("APP_AWARE_STARTED: finite observer; Netflix keeps normal audio");
+                System.out.println("APP_AWARE_STARTED: finite observer; Netflix and Home keep normal audio");
                 try (ForegroundWatcher watcher = new ForegroundWatcher()) {
                     watcher.start();
                     AppAwareController.run(watcher, new AppAwareController.Capture() {
