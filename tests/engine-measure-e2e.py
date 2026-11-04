@@ -18,7 +18,10 @@ import hashlib,json,os,pathlib,shlex,sys,time
 p=pathlib.Path(os.environ['MEASURE_FIXTURE']); journal=pathlib.Path(os.environ['MEASURE_JOURNAL'])
 s=json.loads(p.read_text()); a=sys.argv[1:]
 assert a[:2]==['-s','fixture-device'],a
-def save(): p.write_text(json.dumps(s))
+def save():
+ temporary=p.with_suffix('.tmp')
+ temporary.write_text(json.dumps(s))
+ temporary.replace(p)
 s.setdefault('adb_calls',[]).append(a[2:]); save()
 def fail(name):
  n=s.setdefault('failures_seen',{}).get(name,0)+1; s['failures_seen'][name]=n; save()
