@@ -22,6 +22,7 @@ final class EngineBackend implements AudioController.Backend {
     @Override public String failedCleanupToken() { return failedCleanupToken; }
     private final java.util.function.LongSupplier nanoTime;
     private static final long STOP_BUDGET_NANOS = 30000000000L;
+    private static final long HEARTBEAT_TIMEOUT_NANOS = 45000000000L;
 
     EngineBackend(Context context) {
         this(context, new java.util.function.LongSupplier() {
@@ -159,6 +160,12 @@ final class EngineBackend implements AudioController.Backend {
         String run = UUID.randomUUID().toString().replace("-", "");
         AppConfig.save(prefs.edit().putString("active_run", run));
         shell("mkdir -p " + DIRECTORY + " && chmod 700 " + DIRECTORY);
+        // Clear an earlier Stop under the same lease as every capture owner.
+        // A Stop requested after the run marker exists must remain visible.
+        shell("CLASSPATH='" + apk + "' app_process / app.vbansender.EnginePreparation");
+        if (!stillEnabled.getAsBoolean()) {
+            throw new CancellationException("Start cancelled");
+        }
         // PCM is required by the measured Prime path. Restore the exact saved
         // Android choice on confirmed OFF, including after a failed startup.
         if (!prefs.contains("original_surround")) {
@@ -238,6 +245,13 @@ final class EngineBackend implements AudioController.Backend {
         }
         if (!alive(state)) {
             throw new IllegalStateException("Engine stopped. Turn OFF, then ON to retry.");
+        }
+        if (state.metricsAvailable) {
+            long now = nanoTime.getAsLong();
+            if (state.observedNanos <= 0 || state.observedNanos > now
+                    || now - state.observedNanos >= HEARTBEAT_TIMEOUT_NANOS) {
+                throw new IllegalStateException("Engine heartbeat is stale. Turn OFF, then ON to retry.");
+            }
         }
         prefs.edit().putString("engine_snapshot", snapshot).apply();
     }

@@ -4,10 +4,25 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /** Runs on the box, outside the PCM loop; no laptop or receiver supervisor. */
 final class ForegroundWatcher implements AutoCloseable {
+    private static final long DUMP_TIMEOUT_NANOS = TimeUnit.SECONDS.toNanos(2);
+    private final ExecutorService dumpReader = Executors.newSingleThreadExecutor(new ThreadFactory() {
+        @Override public Thread newThread(Runnable task) {
+            Thread thread = new Thread(task, "foreground-dump-reader");
+            thread.setDaemon(true);
+            return thread;
+        }
+    });
     private volatile ForegroundPolicy policy;
     private final Thread thread = new Thread(new Runnable() {
         @Override
@@ -41,24 +56,14 @@ final class ForegroundWatcher implements AutoCloseable {
             String home = resolveHome();
             policy = new ForegroundPolicy(home);
             System.out.println("HOME " + home);
-            byte[] buffer = new byte[8192];
-            ByteArrayOutputStream output = new ByteArrayOutputStream();
             while (!closed) {
-                output.reset();
                 Process current = new ProcessBuilder("dumpsys", "-t", "1", "activity", "activities")
                         .redirectErrorStream(true).start();
                 process = current;
                 String dump;
-                try (InputStream input = current.getInputStream()) {
-                    int count;
-                    while ((count = input.read(buffer)) != -1) {
-                        output.write(buffer, 0, count);
-                        if (output.size() > 1048576) {
-                            throw new IOException("Foreground dump exceeds 1 MiB");
-                        }
-                    }
-                    int code = current.waitFor();
-                    dump = new String(output.toByteArray(), StandardCharsets.UTF_8);
+                try {
+                    dump = readDump(current);
+                    int code = current.exitValue();
                     if (dump.contains("DUMP TIMEOUT") && !dump.contains("Permission Denial")) {
                         // Release capture immediately; a busy activity service can recover.
                         policy.observe(null, System.nanoTime());
@@ -74,8 +79,14 @@ final class ForegroundWatcher implements AutoCloseable {
                         throw new IOException("Invalid foreground dump (exit " + code + "): " + dump);
                     }
                 } finally {
-                    current.destroy();
-                    process = null;
+                    try {
+                        if (current.isAlive()
+                                && !current.destroyForcibly().waitFor(1, TimeUnit.SECONDS)) {
+                            throw new IOException("Foreground dump process did not stop");
+                        }
+                    } finally {
+                        process = null;
+                    }
                 }
                 String application = ForegroundPolicy.parse(dump);
                 long now = System.nanoTime();
@@ -93,6 +104,42 @@ final class ForegroundWatcher implements AutoCloseable {
                 if (policy != null) policy.observe(null, System.nanoTime());
                 System.err.println("DETECTION_ERROR: " + error);
             }
+        } finally {
+            dumpReader.shutdownNow();
+        }
+    }
+
+    private String readDump(Process current) throws Exception {
+        long deadline = System.nanoTime() + DUMP_TIMEOUT_NANOS;
+        Future<String> result = dumpReader.submit(new Callable<String>() {
+            @Override public String call() throws Exception {
+                ByteArrayOutputStream output = new ByteArrayOutputStream();
+                byte[] buffer = new byte[8192];
+                try (InputStream input = current.getInputStream()) {
+                    int count;
+                    while ((count = input.read(buffer)) != -1) {
+                        output.write(buffer, 0, count);
+                        if (output.size() > 1048576) {
+                            throw new IOException("Foreground dump exceeds 1 MiB");
+                        }
+                    }
+                }
+                return new String(output.toByteArray(), StandardCharsets.UTF_8);
+            }
+        });
+        try {
+            String dump = result.get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+            long remaining = deadline - System.nanoTime();
+            if (!current.waitFor(Math.max(0, remaining), TimeUnit.NANOSECONDS)) {
+                throw new TimeoutException();
+            }
+            return dump;
+        } catch (TimeoutException timeout) {
+            throw new IOException("Foreground dump timed out", timeout);
+        } catch (ExecutionException error) {
+            throw new IOException("Cannot read foreground dump", error.getCause());
+        } finally {
+            result.cancel(true);
         }
     }
 

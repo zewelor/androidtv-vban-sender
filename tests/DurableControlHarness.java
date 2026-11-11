@@ -40,7 +40,9 @@ public final class DurableControlHarness {
         }
         if (command.contains("echo ENABLED")) return "ENABLED";
         mutations++;
-        if (command.startsWith("rm -f ")) {
+        if (command.startsWith("CLASSPATH=")
+                && command.endsWith(" app_process / app.vbansender.EnginePreparation")) return "";
+        if (command.startsWith("rm -f /data/local/tmp/vban-sender/enabled-")) {
             active = false;
             stops++;
             return "";

@@ -30,6 +30,7 @@ jar --create --file build/vban-engine.jar -C build/dex classes.dex \
 python3 tests/e2e.py
 python3 tests/app-aware-e2e.py
 python3 tests/service-e2e.py
+python3 tests/main-activity-retry-check.py
 python3 tests/backend-e2e.py
 python3 tests/durable-control-e2e.py
 python3 tests/adb-e2e.py

@@ -88,6 +88,7 @@ packets, and time since audio progress. Silent PCM counts as read data. No data 
 IDLE is neutral; these values do not confirm playback or receiver reception.
 Stop has a 30-second command/polling budget. If it fails, ownership and saved audio
 settings are retained; select OFF again to explicitly retry cleanup.
+After a failed OFF, use **RETRY OFF** to retry without switching ON first.
 
 ### Known app quirks
 

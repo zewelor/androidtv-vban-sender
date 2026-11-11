@@ -11,8 +11,10 @@ import threading
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "build" / "e2e" / "routing"
-JAVA = ["java", "-cp", str(ROOT / "build/classes") + ":" + str(ROOT / "build/test-classes"),
+OUTPUT = pathlib.Path(os.environ.get("APP_AWARE_OUTPUT", ROOT / "build" / "e2e" / "routing"))
+CLASSES = os.environ.get("APP_AWARE_CLASSES",
+                         str(ROOT / "build/classes") + ":" + str(ROOT / "build/test-classes"))
+JAVA = ["java", "-cp", CLASSES,
         "app.vbansender.AppAwareHarness"]
 YOUTUBE = "org.smarttube.stable"
 PRIME = "com.amazon.amazonvideo.livingroom"
@@ -240,6 +242,47 @@ def detector_recovers():
         trial.close()
 
 
+def detector_hangs():
+    trial = Trial("detector-hangs", dump(YOUTUBE), continuous=True)
+    try:
+        trial.wait("SESSION_STARTED")
+        changed = trial.change("HANG")
+        trial.wait("SESSION_RELEASED", changed, timeout=2.5)
+        report = trial.finish(expected=1)
+        assert time.monotonic() - changed < 3.5, "hung dumpsys was not bounded by a hard deadline"
+        assert "Foreground dump timed out" in trial.stderr_path.read_text()
+        pid = int((trial.directory / "dumpsys-hang.pid").read_text())
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            pass
+        else:
+            raise AssertionError("hung dumpsys process survived timeout")
+        return report
+    finally:
+        trial.close()
+
+
+def large_foreground_dump():
+    trial = Trial("large-foreground-dump", "x" * 131072 + "\n" + dump(YOUTUBE), continuous=True)
+    try:
+        trial.wait("SESSION_STARTED")
+        trial.stop.touch()
+        return trial.finish()
+    finally:
+        trial.close()
+
+
+def small_pipe_foreground_dump():
+    trial = Trial("small-pipe-foreground-dump", "SMALLPIPE", continuous=True)
+    try:
+        trial.wait("SESSION_STARTED", timeout=4)
+        trial.stop.touch()
+        return trial.finish()
+    finally:
+        trial.close()
+
+
 def failure():
     trial = Trial("detector-failure", dump(YOUTUBE))
     try:
@@ -389,6 +432,16 @@ if text=='ERROR':
 if text=='TIMEOUT':
     print('DUMP TIMEOUT')
     sys.exit(0)
+if text=='HANG':
+    import signal
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    pathlib.Path(os.environ['VBAN_SENDER_TEST_FOREGROUND']).with_name('dumpsys-hang.pid').write_text(str(os.getpid()))
+    print('HANG',flush=True)
+    time.sleep(30)
+if text=='SMALLPIPE':
+    import fcntl
+    fcntl.fcntl(sys.stdout.fileno(), fcntl.F_SETPIPE_SZ, 4096)
+    text = 'x' * 524288 + '\\nmResumedActivity: ActivityRecord{fixture u0 org.smarttube.stable/.MainActivity t1}'
 if text=='STALL':
     time.sleep(3)
     text=pathlib.Path(os.environ['VBAN_SENDER_TEST_FOREGROUND']).read_text()
@@ -416,19 +469,29 @@ print(home if home=='No activity found' else home+'/.MainActivity')
                             capture_output=True, text=True, timeout=30)
     assert status.returncode == 0 and "STATUS_CHECK_PASS" in status.stdout, \
         (status.stdout, status.stderr)
-    results = {"transitions": transitions(), "resolved_home": resolved_home(),
-               "home_invalid": home_failure("No activity found"),
-               "home_error": home_failure("ERROR"), "home_timeout": home_failure("STALL"),
-               "stop_during_home_detection": stop_during_home_detection(),
-               "sleep_gate": sleep_gate(),
-               "canceled_before_start": canceled_before_start(),
-               "marker_stops_sending": marker_stops_sending(),
-               "marker_stops_idle": marker_stops_idle(), "detector_failure": failure(),
-               "detector_recovers": detector_recovers(),
-               "capture_recovers": capture_recovers(),
-               "persistent_capture_failure": persistent_capture_failure(),
-               "stop_during_capture_recovery": stop_during_capture_recovery(),
-               "stale_and_stop": stale(), "finite_deadline": deadline()}
+    scenarios = {"transitions": transitions, "resolved_home": resolved_home,
+                 "home_invalid": lambda: home_failure("No activity found"),
+                 "home_error": lambda: home_failure("ERROR"),
+                 "home_timeout": lambda: home_failure("STALL"),
+                 "stop_during_home_detection": stop_during_home_detection,
+                 "sleep_gate": sleep_gate,
+                 "canceled_before_start": canceled_before_start,
+                 "marker_stops_sending": marker_stops_sending,
+                 "marker_stops_idle": marker_stops_idle, "detector_failure": failure,
+                 "detector_recovers": detector_recovers, "detector_hangs": detector_hangs,
+                 "large_foreground_dump": large_foreground_dump,
+                 "small_pipe_foreground_dump": small_pipe_foreground_dump,
+                 "capture_recovers": capture_recovers,
+                 "persistent_capture_failure": persistent_capture_failure,
+                 "stop_during_capture_recovery": stop_during_capture_recovery,
+                 "stale_and_stop": stale, "finite_deadline": deadline}
+    selected = os.environ.get("APP_AWARE_SCENARIO")
+    if selected is not None:
+        if selected not in scenarios:
+            raise SystemExit("unknown APP_AWARE_SCENARIO: " + selected)
+        results = {selected: scenarios[selected]()}
+    else:
+        results = {name: scenario() for name, scenario in scenarios.items()}
     report = {"result": "PASS", "scope": "Real observer/controller, synthetic dumpsys and UDP backend; no Android audio proof",
               "scenarios": results}
     (OUTPUT / "report.json").write_text(json.dumps(report, indent=2) + "\n")

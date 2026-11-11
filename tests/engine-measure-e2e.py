@@ -51,6 +51,8 @@ elif c=='dumpsys activity activities':
  app='com.other.app' if s.get('mode')=='wrong-app' else 'com.amazon.amazonvideo.livingroom'
  print('mResumedActivity: ActivityRecord{fixture u0 '+app+'/.MainActivity t1}')
 elif c=='settings get global encoded_surround_output': print(s['surround'])
+elif c.startswith('CLASSPATH=') and c.endswith(' app_process / app.vbansender.EnginePreparation'):
+ event('stop_clear'); s['stop']=False; save()
 elif c.startswith('if [ -e '):
  path=shlex.split(c)[3]
  present=(s['stop'] if path.endswith('/stop') else
@@ -74,7 +76,7 @@ elif c.startswith('touch '):
  save()
 elif c.startswith('CLASSPATH='):
  t=shlex.split(c); run=t[8]; s['launch_seen']=True
- s['stop']=False
+ assert not s['stop'], 'stale Stop must be cleared before the engine is enabled'
  s['final']='run='+run+' uid=2000 pid=123 state='+('ERROR' if s.get('mode')=='bad-state' else 'STOPPED')+' message=none'
  save()
  if s.get('mode')=='engine-error': print('fixture engine failed',file=sys.stderr);sys.exit(7)
@@ -349,7 +351,8 @@ def timeout_keeps_stdout_only_partial_log():
 
     def intercept_popen(command, *args, **kwargs):
         if (len(command) > 4 and command[0] == "adb" and command[3] == "shell"
-                and command[4].startswith("CLASSPATH=")):
+                and command[4].startswith("CLASSPATH=")
+                and " app_process / app.vbansender.AudioEngine " in command[4]):
             return timed_process
         return real_popen(command, *args, **kwargs)
 

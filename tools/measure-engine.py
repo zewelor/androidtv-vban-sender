@@ -369,6 +369,8 @@ def main():
         if installed_hash != digest:
             raise RuntimeError("Device measurement JAR hash differs from the local artifact")
         shell("mkdir -p " + REMOTE + " && chmod 700 " + REMOTE)
+        shell("CLASSPATH=" + shlex.quote(report["jar_path"])
+              + " app_process / app.vbansender.EnginePreparation")
         shell("settings put global encoded_surround_output 1")
         shell("touch " + shlex.quote(report["marker_path"]))
         command = ["app_process", "/", "app.vbansender.AudioEngine", str(destination),

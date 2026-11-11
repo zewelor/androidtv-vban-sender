@@ -12,12 +12,55 @@ public final class BackendCleanupHarness {
     private static boolean slow;
     private static long nanos;
     private static boolean newerOffOnRestore;
+    private static boolean health;
+    private static String healthStatus;
+    private static boolean starting;
+    private static boolean staleStop;
+    private static boolean markerCreated;
+    private static boolean foreignOwner;
+    private static int startupSurroundWrites;
     public static String command(String command) throws Exception {
         return command(command, 10000);
     }
 
     public static String command(String command, int timeout) throws Exception {
         commands++;
+        if (starting) {
+            if (command.equals("id")) return "uid=2000(shell)";
+            if (command.startsWith("if [ -f ")) {
+                return markerCreated ? "run=" + Context.prefs.getString("active_run", "")
+                        + " uid=2000 pid=123 state=IDLE message=none" : "";
+            }
+            if (command.contains("/cmdline")) return "app.vbansender.AudioEngine\n"
+                    + Context.prefs.getString("active_run", "");
+            if (command.startsWith("mkdir -p ")) return "";
+            if (command.equals("settings get global encoded_surround_output")) return "0";
+            if (command.startsWith("settings put global encoded_surround_output ")) {
+                startupSurroundWrites++;
+                return "";
+            }
+            if (command.startsWith("CLASSPATH=")
+                    && command.endsWith(" app_process / app.vbansender.EnginePreparation")) {
+                if (foreignOwner) throw new IOException("Capture lock is held");
+                require(!markerCreated, "A newly requested Stop could be erased after enabling");
+                staleStop = false;
+                return "";
+            }
+            if (command.startsWith("touch /data/local/tmp/vban-sender/enabled-")) {
+                require(!staleStop, "Stale Stop must be cleared before enabling a new run");
+                markerCreated = true;
+                return "";
+            }
+            if (command.startsWith("CLASSPATH=")) {
+                if (foreignOwner) throw new IOException("Capture lock is held");
+                return "";
+            }
+            throw new AssertionError("Unexpected startup operation: " + command);
+        }
+        if (health && command.startsWith("if [ -f ")) return healthStatus;
+        if (health && command.contains("/cmdline")) {
+            return "app.vbansender.AudioEngine\n0123456789abcdef0123456789abcdef";
+        }
         if (slow) {
             long remaining = 30000000000L - nanos;
             require(remaining > 0 && timeout <= Math.min(10000, remaining / 1000000L),
@@ -49,6 +92,14 @@ public final class BackendCleanupHarness {
     }
 
     public static void main(String[] args) throws Exception {
+        if (args.length == 1 && "startup".equals(args[0])) {
+            startClearsStaleStopBeforeEnabling();
+            return;
+        }
+        if (args.length == 1 && "foreign".equals(args[0])) {
+            startPreservesForeignStop();
+            return;
+        }
         MemoryPrefs prefs = new MemoryPrefs(); Context.prefs = prefs;
         String run = "0123456789abcdef0123456789abcdef";
         AppConfig.save(prefs.edit().putString("receiver", "192.0.2.1")
@@ -97,7 +148,76 @@ public final class BackendCleanupHarness {
         require(nanos == 30000000000L && commands - before == 4, "Stop did not obey one budget");
         require(prefs.getBoolean("cleanup_pending", false) && prefs.contains("active_run")
                 && prefs.contains("original_surround"), "timeout discarded recovery state");
+        checkHeartbeat(prefs, run);
+        startClearsStaleStopBeforeEnabling();
+        startPreservesForeignStop();
         System.out.println("BACKEND_CLEANUP_PASS");
+    }
+
+    private static void startPreservesForeignStop() throws Exception {
+        MemoryPrefs fresh = new MemoryPrefs();
+        Context.prefs = fresh;
+        AppConfig.save(fresh.edit().putString("receiver", "192.0.2.1"));
+        starting = true;
+        foreignOwner = true;
+        staleStop = true;
+        markerCreated = false;
+        startupSurroundWrites = 0;
+        try {
+            try {
+                new EngineBackend(new Context()).start(() -> true);
+                throw new AssertionError("A foreign capture owner must block startup");
+            } catch (IOException expected) {
+                require(staleStop, "Starting erased an emergency Stop for another capture owner");
+                require(!markerCreated, "Starting enabled a run while another owner held the lock");
+                require(startupSurroundWrites == 0, "Starting changed another owner's audio setting");
+            }
+        } finally {
+            starting = false;
+            foreignOwner = false;
+        }
+    }
+
+    private static void startClearsStaleStopBeforeEnabling() throws Exception {
+        MemoryPrefs fresh = new MemoryPrefs();
+        Context.prefs = fresh;
+        AppConfig.save(fresh.edit().putString("receiver", "192.0.2.1"));
+        starting = true;
+        staleStop = true;
+        markerCreated = false;
+        try {
+            new EngineBackend(new Context()).start(() -> true);
+            require(markerCreated && !staleStop, "New run was not enabled");
+        } finally {
+            starting = false;
+        }
+    }
+
+    private static void checkHeartbeat(MemoryPrefs prefs, String run) throws Exception {
+        slow = false;
+        health = true;
+        nanos = 100000000000L;
+        AppConfig.save(prefs.edit().putString("active_run", run));
+        EngineBackend backend = new EngineBackend(new Context(), () -> nanos);
+        String prefix = "run=" + run + " uid=2000 pid=123 state=IDLE ";
+        String metrics = "v=2 frames_read=0 sent=0 dropped=0 observed_ns=";
+        healthStatus = prefix + metrics + "99000000000 last_read_ns=0 last_send_ns=0 message=none";
+        backend.check(); // A fresh idle heartbeat is healthy even without audio.
+        String lastHealthy = healthStatus;
+        healthStatus = prefix + metrics + "50000000000 last_read_ns=0 last_send_ns=0 message=none";
+        try {
+            backend.check();
+            throw new AssertionError("Stale engine heartbeat was accepted as healthy");
+        } catch (IllegalStateException expected) {
+            require(expected.getMessage().contains("heartbeat"), "Wrong stale heartbeat error");
+        }
+        require(lastHealthy.equals(prefs.getString("engine_snapshot", "")),
+                "A stale heartbeat must not replace the last checked snapshot");
+        healthStatus = prefix + metrics + "99000000000 last_read_ns=0 last_send_ns=0 message=none";
+        backend.check(); // A later heartbeat makes the same backend healthy again.
+        healthStatus = prefix + "message=none";
+        backend.check(); // Legacy snapshots have no monotonic timestamp to check.
+        health = false;
     }
 
     private static void require(boolean condition, String message) {

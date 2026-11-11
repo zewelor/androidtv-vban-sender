@@ -1,9 +1,15 @@
 package app.vbansender;
 
 import java.io.File;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.RandomAccessFile;
+import java.io.IOException;
+import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Arrays;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 
 /** Real marker cancellation and status IPC, with bounded filesystem polling. */
@@ -19,15 +25,60 @@ public final class EngineTimingHarness {
             throw new IllegalStateException("Cannot create test directory: " + directory);
         }
         if ("check".equals(args[0])) {
+            preparationRespectsOtherOwner(directory);
+            stopBeforeEngineStartup(directory);
             boundedPolling(directory);
             cancellationIsFinal(directory, false);
             cancellationIsFinal(directory, true);
             System.out.println("ENGINE_TIMING_PASS");
+        } else if ("hold-lock".equals(args[0])) {
+            try (RandomAccessFile file = new RandomAccessFile(new File(directory, "engine.lock"), "rw");
+                    FileLock lock = file.getChannel().lock()) {
+                System.out.println("LOCKED");
+                System.out.flush();
+                System.in.read();
+            }
         } else if ("benchmark".equals(args[0])) {
             benchmark(directory);
         } else {
             throw new IllegalArgumentException("Expected check or benchmark");
         }
+    }
+
+    private static void preparationRespectsOtherOwner(File directory) throws Exception {
+        File stop = new File(directory, "stop");
+        Files.write(stop.toPath(), new byte[0]);
+        java.lang.Process owner = new ProcessBuilder(System.getProperty("java.home") + "/bin/java",
+                "-cp", System.getProperty("java.class.path"), EngineTimingHarness.class.getName(),
+                "hold-lock", directory.getAbsolutePath()).redirectErrorStream(true).start();
+        try {
+            BufferedReader output = new BufferedReader(new InputStreamReader(owner.getInputStream(), StandardCharsets.UTF_8));
+            require("LOCKED".equals(output.readLine()), "Capture owner did not acquire the lease");
+            try {
+                EnginePreparation.clearStop(directory);
+                throw new AssertionError("Preparation ignored another capture owner");
+            } catch (IOException expected) {
+                require(stop.isFile(), "Preparation erased the other owner's emergency Stop");
+            }
+        } finally {
+            owner.getOutputStream().write('\n');
+            owner.getOutputStream().flush();
+            if (!owner.waitFor(3, TimeUnit.SECONDS)) owner.destroyForcibly();
+        }
+        require(owner.exitValue() == 0, "Capture owner did not release its lease");
+        EnginePreparation.clearStop(directory);
+        require(!stop.exists(), "A stale Stop was not cleared after the owner exited");
+    }
+
+    private static void stopBeforeEngineStartup(File directory) throws Exception {
+        File marker = new File(directory, "enabled-before-start");
+        File stop = new File(directory, "stop-before-start");
+        Files.write(marker.toPath(), new byte[0]);
+        Files.write(stop.toPath(), new byte[0]);
+        EngineRunGate gate = new EngineRunGate(marker, stop);
+        require(!gate.prepare(), "Stop requested after launch must prevent delayed startup");
+        require(stop.isFile(), "Startup must not consume an emergency Stop");
+        require(!gate.enabled(), "A stopped run must not become enabled");
     }
 
     private static void boundedPolling(File directory) throws Exception {

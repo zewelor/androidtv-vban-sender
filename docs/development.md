@@ -61,6 +61,10 @@ so seamless app transitions are not guaranteed.
 The app serializes ON/OFF requests. The shell engine owns the capture lock;
 a per-run marker fences delayed starts after OFF. Atomic status includes run, UID,
 PID, state, and error; this live status does not force a physical storage sync.
+Before enabling a new run, a shell helper acquires the shared capture lock and
+clears an earlier emergency Stop. It fails without touching Stop if another capture
+owner holds the lock. Once the helper finishes, a new emergency Stop is retained
+and prevents delayed startup.
 The audio loop checks run/stop files at most once per 500 ms, which can add up to
 500 ms to OFF marker detection; an observed cancellation is final for that run.
 Startup validates the run marker immediately.
@@ -79,13 +83,17 @@ Temporary UDP port-unreachable notifications discard packets without stopping ca
 unexpected socket and capture failures remain visible. Lost audio is not replayed.
 A foreground-detection timeout releases capture and retries; a fresh non-excluded app
 observation must become stable before capture resumes. Permission errors remain fatal.
+If the `dumpsys` process itself fails to exit within two seconds, it is forcibly
+terminated and the detector reports a fatal error instead of waiting indefinitely.
 `AudioRecord.ERROR_DEAD_OBJECT` releases and recreates the recorder after a cancellable
 one-second delay, with at most three retries when failures recur within ten seconds.
 Persistent recorder failures and other capture errors remain fatal. See the
 [AudioRecord API](https://developer.android.com/reference/android/media/AudioRecord#ERROR_DEAD_OBJECT).
 The service checks engine status every 15 seconds on the Start/Stop worker and
 when the app is reopened. Checks report failures without restarting a failed engine;
-a successful check clears a temporary status-read error.
+a v2 engine heartbeat at least 45 seconds old is reported as an error even if its
+process is still alive. Silence and IDLE do not count as failures. A successful
+check clears a temporary status-read error. Legacy snapshots have no heartbeat age.
 The UI saves the requested choice; controller callbacks publish progress and errors.
 OFF acceptance atomically saves a unique pending token before service dispatch.
 Intents only wake reconciliation of the latest persisted choice. Successful Stop
@@ -105,6 +113,8 @@ backends cannot adopt it until OFF has restored audio settings and cleared owner
 `tests/service-e2e.py` executes the service, controller, and toggle dispatch with
 controlled Android lifecycle adapters. It covers delayed commands, failed cleanup
 visibility, stale OFF callbacks, and rejected shutdown.
+`tests/main-activity-retry-check.py` checks that failed OFF cleanup can be retried
+directly, including when the receiver configuration is unavailable.
 It also covers OFF → ON during a health check and service replacement during
 Start or pending OFF cleanup. Reports are under
 `build/e2e/service/`; the adapters do not establish Android lifecycle behavior.

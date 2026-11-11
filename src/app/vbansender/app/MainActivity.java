@@ -19,6 +19,8 @@ public final class MainActivity extends Activity {
     private Button toggle;
     private TextView status;
     private SharedPreferences prefs;
+    private boolean renderedEnabled;
+    private boolean renderedRetryOff;
     private final SharedPreferences.OnSharedPreferenceChangeListener changes =
             new SharedPreferences.OnSharedPreferenceChangeListener() {
         @Override
@@ -59,7 +61,7 @@ public final class MainActivity extends Activity {
             @Override
             public void onClick(View view) {
                 try {
-                    boolean enabled = !prefs.getBoolean("enabled", false);
+                    boolean enabled = !renderedEnabled && !renderedRetryOff;
                     VbanService.setEnabled(MainActivity.this, enabled);
                 } catch (Exception error) {
                     AppConfig.save(prefs.edit().putString("last_error", error.toString()));
@@ -100,14 +102,18 @@ public final class MainActivity extends Activity {
 
     private void render() {
         boolean enabled = prefs.getBoolean("enabled", false);
-        toggle.setText(enabled ? "ON" : "OFF");
+        boolean retryOff = retryOff();
+        renderedEnabled = enabled;
+        renderedRetryOff = retryOff;
+        toggle.setText(retryOff ? "RETRY OFF" : enabled ? "ON" : "OFF");
         toggle.setBackground(buttonBackground(enabled ? Color.rgb(35, 110, 71)
                 : Color.rgb(51, 64, 78)));
-        toggle.setEnabled(enabled || AppConfig.configured(this));
+        toggle.setEnabled(enabled || retryOff || AppConfig.configured(this));
         String error = prefs.getString("last_error", "");
         String state = prefs.getString("controller_state", "OFF");
         if (!error.isEmpty()) {
-            status.setText("Error: " + error + "\nTurn OFF, then ON to retry.");
+            status.setText("Error: " + error + (retryOff ? "\nRetry OFF to finish cleanup."
+                    : enabled ? "\nTurn OFF, then ON to retry." : "\nTurn ON to retry."));
         } else if ("STARTING".equals(state) || "STOPPING".equals(state)) {
             status.setText("STARTING".equals(state) ? "Starting…" : "Stopping…");
         } else if (!AppConfig.configured(this)) {
@@ -116,6 +122,11 @@ public final class MainActivity extends Activity {
             status.setText(enabled ? "Automatic audio routing enabled"
                     : "Audio via standard output");
         }
+    }
+
+    private boolean retryOff() {
+        return !prefs.getBoolean("enabled", false) && !prefs.getString("last_error", "").isEmpty()
+                && AppConfig.needsReconcile(this);
     }
 
     private StateListDrawable buttonBackground(int color) {

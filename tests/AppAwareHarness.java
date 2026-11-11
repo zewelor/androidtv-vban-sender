@@ -192,13 +192,22 @@ public final class AppAwareHarness {
         try (java.io.FileOutputStream output = new java.io.FileOutputStream(marker)) {
             output.write(1);
         }
+        gate = new EngineRunGate(marker, stop);
         if (gate.prepare() || !stop.exists()) {
             throw new AssertionError("Non-empty run marker was accepted");
         }
         try (java.io.FileOutputStream output = new java.io.FileOutputStream(marker)) {
             // An empty marker is the only value accepted for launch.
         }
-        if (!gate.prepare() || stop.exists() || !gate.enabled()) {
+        gate = new EngineRunGate(marker, stop);
+        if (gate.prepare() || !stop.exists()) {
+            throw new AssertionError("Emergency Stop did not prevent delayed startup");
+        }
+        if (!stop.delete()) {
+            throw new AssertionError("Could not clear Stop before enabling a new run");
+        }
+        gate = new EngineRunGate(marker, stop);
+        if (!gate.prepare() || !gate.enabled()) {
             throw new AssertionError("Enabled run marker did not prepare the engine");
         }
         if (!marker.delete()) {
