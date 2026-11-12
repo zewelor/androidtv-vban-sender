@@ -14,8 +14,10 @@ The local test signing key is generated in `build/signing/proof.p12`.
 Keep it for updates to your own installation; it is not a production release key.
 Each fresh CI job generates a different signing key. Its APKs are test artifacts,
 stored as `vban-test-build`. Pushes and manual builds on `main` additionally produce
-`vban-release-build/vban-release.apk` with the retained release key. Pull requests
-and other branches do not receive release secrets. The developer APK stays test-signed.
+`vban-release-build/vban-release.apk` with the retained release key. Version tags
+(`v*`) also produce this signed artifact and publish it as a GitHub Release after
+verification succeeds. Pull requests and other branches do not receive release
+secrets. The developer APK stays test-signed.
 Changing from a test signature to the release signature requires one reinstall and
 reauthorization. Later release builds preserve app data when installed as updates.
 Increase `versionCode` and `versionName` in the manifest for each published version.
@@ -40,7 +42,24 @@ sh tools/sign-release.sh /private/path/release.p12 /private/path/password.txt
 ```
 
 This produces `build/vban-release.apk` and its checksum. Actions artifacts expire
-after seven days; release signing does not publish a GitHub Release or add an app updater.
+after seven days; GitHub Release assets remain available independently.
+
+### Publishing a release
+
+Update `versionCode` and `versionName` in `app/AndroidManifest.xml`, commit and push
+to `main`, and wait for Verify to pass. Then push a tag matching `versionName`
+with a `v` prefix, for example:
+
+```sh
+git tag -a v0.15 -m 'VBAN Sender v0.15'
+git push origin v0.15
+```
+
+The tag build rejects a mismatched version, runs the full build and synthetic test
+suite, and signs the normal APK using the retained release key. A separate job
+checks its SHA-256 and publishes `vban-release.apk` and `vban-release.apk.sha256`
+with generated release notes. Test APKs, developer APKs, signing keys, and device
+diagnostics are not release assets. Releases do not add an app updater.
 
 ## Runtime
 
