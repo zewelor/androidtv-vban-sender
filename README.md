@@ -29,6 +29,9 @@ Outputs: `build/vban.apk`, `build/vban-dev.apk`, `build/vban-engine.jar`,
 SHA-256 files, and test reports in `build/e2e/`. Use `vban.apk` for normal use.
 Download `vban-release.apk` from the latest
 [GitHub Release](https://github.com/zewelor/androidtv-vban-sender/releases/latest).
+Releases include a SHA-256 checksum and are published automatically after CI passes
+for a `v*` tag matching the app version. See
+[publishing a release](docs/development.md#publishing-a-release).
 Successful `main` builds also provide it in the `vban-release-build` artifact.
 These APKs share a retained signing key. The separate
 `vban-test-build` artifacts use temporary test keys; see
