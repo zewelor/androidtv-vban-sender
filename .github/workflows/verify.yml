@@ -14,7 +14,7 @@ concurrency:
 jobs:
   verify:
     name: Build and verify sender
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
@@ -82,7 +82,7 @@ jobs:
     name: Publish GitHub Release
     needs: verify
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       actions: read
