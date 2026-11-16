@@ -129,9 +129,12 @@ final class EngineBackend implements AudioController.Backend {
         if (requested.cleanupPending || !requested.offToken.isEmpty()) {
             throw new IllegalStateException("Previous cleanup is incomplete. Turn OFF, then ON to retry.");
         }
-        if (prefs.getString("active_run", "").isEmpty()) checkManualRecovery();
+        String previous = prefs.getString("active_run", "");
+        if (previous.isEmpty()) checkManualRecovery();
         OutputConfig config = AppConfig.read(context);
-        requireNetwork(config.destination.getAddress());
+        // A fresh start can wait without ADB. A saved owner must first be
+        // inspected so an unseen fatal exit cannot become a network retry.
+        if (previous.isEmpty()) requireNetwork(config.destination.getAddress());
         if (!stillEnabled.getAsBoolean()) {
             throw new CancellationException("Start cancelled");
         }
@@ -157,16 +160,17 @@ final class EngineBackend implements AudioController.Backend {
             }
         }
         EngineState existing = read();
-        String previous = prefs.getString("active_run", "");
+        if (existing != null && !previous.isEmpty() && existing.run.equals(previous)
+                && ("ERROR".equals(existing.state) || "STOPPED".equals(existing.state))) {
+            checkManualRecovery();
+            throw new IllegalStateException("Previous engine " + existing.state + ": " + existing.message);
+        }
         if (existing != null && alive(existing)) {
             if (!existing.run.equals(previous)) {
                 throw new IllegalStateException("Another engine is running; use developer Stop");
             }
             if ("NETWORK_UNAVAILABLE".equals(existing.state)) {
                 throw new AudioController.NetworkUnavailableException(existing.message);
-            }
-            if ("ERROR".equals(existing.state) || "STOPPED".equals(existing.state)) {
-                throw new IllegalStateException("Previous engine is still exiting");
             }
             if (!"ENABLED".equals(shell("if [ -f " + marker(previous)
                     + " ]; then echo ENABLED; fi").trim())) {
@@ -176,6 +180,7 @@ final class EngineBackend implements AudioController.Backend {
             return;
         }
         checkManualRecovery();
+        requireNetwork(config.destination.getAddress());
         if (!previous.isEmpty()) {
             shell("rm -f " + marker(previous));
         }

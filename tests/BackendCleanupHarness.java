@@ -20,6 +20,8 @@ public final class BackendCleanupHarness {
     private static boolean markerCreated;
     private static boolean foreignOwner;
     private static int startupSurroundWrites;
+    private static String startupPreviousStatus = "";
+    private static int startupLaunches;
     private static Runnable beforeIdentity;
     private static Runnable beforeHealthRead;
     public static String command(String command) throws Exception {
@@ -35,10 +37,11 @@ public final class BackendCleanupHarness {
             if (command.equals("id")) return "uid=2000(shell)";
             if (command.startsWith("if [ -f ")) {
                 return markerCreated ? "run=" + Context.prefs.getString("active_run", "")
-                        + " uid=2000 pid=123 state=IDLE message=none" : "";
+                        + " uid=2000 pid=123 state=IDLE message=none" : startupPreviousStatus;
             }
-            if (command.contains("/cmdline")) return "app.vbansender.AudioEngine\n"
-                    + Context.prefs.getString("active_run", "");
+            if (command.contains("/cmdline")) return !markerCreated && !startupPreviousStatus.isEmpty() ? ""
+                    : "app.vbansender.AudioEngine\n" + Context.prefs.getString("active_run", "");
+            if (command.startsWith("rm -f ")) return "";
             if (command.startsWith("mkdir -p ")) return "";
             if (command.equals("settings get global encoded_surround_output")) return "0";
             if (command.startsWith("settings put global encoded_surround_output ")) {
@@ -59,6 +62,7 @@ public final class BackendCleanupHarness {
             }
             if (command.startsWith("CLASSPATH=")) {
                 if (foreignOwner) throw new IOException("Capture lock is held");
+                startupLaunches++;
                 return "";
             }
             throw new AssertionError("Unexpected startup operation: " + command);
@@ -104,6 +108,7 @@ public final class BackendCleanupHarness {
 
     public static void main(String[] args) throws Exception {
         missingNetworkDoesNotLaunch();
+        unobservedTerminalFailureRequiresRecovery();
         fatalFailureSurvivesOwnerRecreation();
         obsoleteFailureDoesNotBlockRecoveredRequest();
         if (args.length == 1 && "startup".equals(args[0])) {
@@ -254,6 +259,46 @@ public final class BackendCleanupHarness {
         } catch (AudioController.NetworkUnavailableException expected) {
             require(before == commands && !prefs.contains("active_run") && !prefs.contains("original_surround"),
                     "Network must be checked before ADB, surround changes or launch");
+        }
+    }
+
+    private static void unobservedTerminalFailureRequiresRecovery() throws Exception {
+        String run = "0123456789abcdef0123456789abcdef";
+        starting = true;
+        try {
+            for (String state : new String[] {"ERROR", "STOPPED"}) {
+                for (boolean hasNetwork : new boolean[] {true, false}) {
+                    MemoryPrefs prefs = new MemoryPrefs(); Context.prefs = prefs;
+                    AppConfig.save(prefs.edit().putBoolean("enabled", true).putString("receiver", "192.0.2.1")
+                            .putString("active_run", run));
+                    startupPreviousStatus = "run=" + run + " uid=2000 pid=123 state=" + state
+                            + " message=Capture permission denied";
+                    markerCreated = false; startupLaunches = 0; startupSurroundWrites = 0;
+                    try {
+                        new EngineBackend(new Context(), address -> hasNetwork).start(() -> true);
+                        throw new AssertionError("Unobserved " + state + " was relaunched without explicit recovery");
+                    } catch (IllegalStateException expected) {
+                        require(prefs.getString("manual_recovery_error", "").contains("Capture permission denied"),
+                                "Unobserved terminal failure lost its reason, network=" + hasNetwork);
+                    }
+                    require(startupLaunches == 0 && startupSurroundWrites == 0 && !markerCreated
+                            && run.equals(prefs.getString("active_run", "")), "Fatal owner was replaced or audio changed");
+                }
+            }
+            // A dead foreign status and a recoverable network exit must still allow a new run.
+            for (String status : new String[] {
+                    "run=abcdef0123456789abcdef0123456789 uid=2000 pid=123 state=ERROR message=Old unrelated failure",
+                    "run=" + run + " uid=2000 pid=123 state=NETWORK_UNAVAILABLE message=Network unavailable"}) {
+                MemoryPrefs prefs = new MemoryPrefs(); Context.prefs = prefs;
+                AppConfig.save(prefs.edit().putBoolean("enabled", true).putString("receiver", "192.0.2.1")
+                        .putString("active_run", run));
+                startupPreviousStatus = status; markerCreated = false; staleStop = true; startupLaunches = 0;
+                new EngineBackend(new Context()).start(() -> true);
+                require(startupLaunches == 1 && !run.equals(prefs.getString("active_run", ""))
+                        && prefs.getString("manual_recovery_error", "").isEmpty(), "Recoverable restart was blocked");
+            }
+        } finally {
+            starting = false; startupPreviousStatus = "";
         }
     }
 

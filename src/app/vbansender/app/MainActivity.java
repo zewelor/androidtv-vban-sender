@@ -122,35 +122,35 @@ public final class MainActivity extends Activity {
         int color = Color.rgb(51, 64, 78);
         boolean stopping = "STOPPING".equals(state) || !enabled && AppConfig.needsReconcile(this);
         if (!error.isEmpty()) {
-            label = retryOff ? "RETRY OFF" : "ERROR";
+            label = retryOff ? "RETRY OFF" : enabled ? "ERROR\nTURN OFF" : "ERROR\nTURN ON";
             color = Color.rgb(153, 44, 44);
-            message = retryOff ? "Turning VBAN off did not finish.\nPress OK to retry. Details in Settings."
+            message = retryOff ? "Turning VBAN off did not finish.\nSelect RETRY OFF. Details in Settings."
                     : prefs.getString("last_error_summary", "Audio routing needs attention.")
-                        + (enabled ? "\nPress OK to turn VBAN off, then try again."
-                                : "\nPress OK to try again. Details in Settings.");
+                        + (enabled ? "\nSelect TURN OFF, then TURN ON to try again."
+                                : "\nSelect TURN ON to try again. Details in Settings.");
         } else if (stopping) {
             label = "STOPPING…";
             color = Color.rgb(153, 101, 20);
             message = "Restoring standard audio. Please wait.";
         } else if (!enabled) {
-            label = "OFF";
-            message = AppConfig.configured(this) ? "Audio via standard output.\nPress OK to turn VBAN on."
+            label = "OFF\nTURN ON";
+            message = AppConfig.configured(this) ? "Audio via standard output.\nSelect TURN ON to enable VBAN."
                     : "Open Settings to configure the receiver and local ADB.";
         } else if ("WAITING_NETWORK".equals(state)) {
-            label = "WAITING";
+            label = "WAITING\nTURN OFF";
             color = Color.rgb(153, 101, 20);
             long seconds = AppConfig.networkRetrySeconds(prefs, SystemClock.uptimeMillis());
             message = (seconds == 0 ? "Retrying connection…" : "Network unavailable. Retrying in " + seconds + " s.")
-                    + "\nPress OK to turn VBAN off.";
+                    + "\nSelect TURN OFF to disable VBAN.";
             if (resumed) main.postDelayed(countdown, 1000);
         } else if ("ON".equals(state)) {
-            label = "ON";
+            label = "ON\nTURN OFF";
             color = Color.rgb(35, 110, 71);
-            message = "Automatic audio routing ready.\nPress OK to turn VBAN off.";
+            message = "Automatic audio routing ready.\nSelect TURN OFF to disable VBAN.";
         } else {
-            label = "STARTING…";
+            label = "STARTING…\nCANCEL";
             color = Color.rgb(153, 101, 20);
-            message = "Preparing audio routing.\nPress OK to cancel.";
+            message = "Preparing audio routing.\nSelect CANCEL to turn VBAN off.";
         }
         toggle.setText(label);
         toggle.setBackground(buttonBackground(color));
