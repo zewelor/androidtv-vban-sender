@@ -48,18 +48,18 @@ public class Activity extends android.content.Context {
         "android/os/Bundle.java": "package android.os; public class Bundle { }",
         "android/graphics/Color.java": "package android.graphics; public class Color { public static final int WHITE=-1; public static int rgb(int r,int g,int b){return (r<<16)|(g<<8)|b;} }",
         "android/graphics/Typeface.java": "package android.graphics; public class Typeface { public static final int BOLD=1; }",
-        "android/graphics/drawable/GradientDrawable.java": "package android.graphics.drawable; public class GradientDrawable { public void setColor(int c){} public void setCornerRadius(float r){} public void setStroke(int w,int c){} }",
-        "android/graphics/drawable/StateListDrawable.java": "package android.graphics.drawable; public class StateListDrawable { public void addState(int[] s,GradientDrawable d){} }",
+        "android/graphics/drawable/GradientDrawable.java": "package android.graphics.drawable; public class GradientDrawable { public int color; public void setColor(int c){color=c;} public void setCornerRadius(float r){} public void setStroke(int w,int c){} }",
+        "android/graphics/drawable/StateListDrawable.java": "package android.graphics.drawable; public class StateListDrawable { public int color; public void addState(int[] s,GradientDrawable d){color=d.color;} }",
         "android/view/Gravity.java": "package android.view; public class Gravity { public static final int CENTER_HORIZONTAL=1,CENTER=2; }",
         "android/view/View.java": """
 package android.view;
 public class View {
  public static final int FOCUSABLE=1;
- private OnClickListener listener; private boolean enabled=true;
+ private OnClickListener listener; private boolean enabled=true; public Object background;
  public interface OnClickListener { void onClick(View v); }
  public void setOnClickListener(OnClickListener l){listener=l;}
  public boolean performClick(){if(listener!=null&&enabled){listener.onClick(this);return true;}return false;}
- public void requestFocus(){} public void setBackground(Object b){} public void setEnabled(boolean e){enabled=e;}
+ public void requestFocus(){} public void setBackground(Object b){background=b;} public void setEnabled(boolean e){enabled=e;}
  public boolean isEnabled(){return enabled;}
 }
 """,
@@ -120,7 +120,7 @@ def main():
                    + [str(ROOT / "src/app/vbansender" / p) for p in actual]
                    + [str(ROOT / "tests" / p) for p in ("MainActivityRetryHarness.java", "MemoryPrefs.java")], check=True)
     for scenario in ("failed_off_cleanup", "failed_off_unconfigured", "retry_displayed_after_cleanup",
-                     "ordinary_off", "failed_start", "off_error_without_pending", "network_wait"):
+                     "ordinary_off", "failed_start", "off_error_without_pending", "network_wait", "state_transitions", "failed_stop_requested_on"):
         subprocess.run(["java", "-cp", str(classes), "app.vbansender.app.MainActivityRetryHarness", scenario],
                        check=True, timeout=10)
     print("PASS: failed OFF retry, ordinary OFF→ON, failed-start OFF recovery, and state-specific error guidance")

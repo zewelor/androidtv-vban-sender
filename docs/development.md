@@ -98,7 +98,8 @@ Before starting, the service checks for an IPv4 route to the saved receiver usin
 UDP network-unreachable/down errors enter `WAITING_NETWORK` after confirmed cleanup.
 Retries wait 10, 20, 40, 80, 160, then 300 seconds. Each retry reads current
 network state, so polling can recover even without a callback. A route-change event
-wakes a waiting retry immediately. A successful health check after at least 30 seconds
+wakes a waiting retry after a 250 ms quiet period that coalesces route-change bursts.
+A successful health check after at least 30 seconds
 of uninterrupted healthy operation resets backoff; startup alone does not reset it.
 Any failed health check interrupts that window.
 OFF cancels retries and still requires normal cleanup. Cleanup failures block retries.
@@ -137,6 +138,23 @@ failures without restarting a failed engine; network loss uses the retry policy 
 A v2 engine heartbeat at least 45 seconds old is reported as an error even if its
 process is still alive. Silence and IDLE do not count as failures. A successful
 check clears a temporary status-read error. Legacy snapshots have no heartbeat age.
+Startup and adoption of an existing owned engine also run the health check before
+reporting ON. The daily screen uses gray OFF, amber STARTING/WAITING/STOPPING,
+green ready ON, and red ERROR/RETRY OFF. Technical exceptions stay in Settings and
+logs; the main screen gives the recovery action. STARTING and WAITING can be
+cancelled; STOPPING waits for cleanup, with retry available if cleanup fails.
+
+The foreground service requests `START_STICKY` while saved ON or cleanup obligations
+remain. After ordinary process death Android may recreate its owner with a null
+Intent; reconciliation reads persisted requests, validates and adopts a healthy
+existing engine, and does not start audio after confirmed OFF. Incomplete cleanup
+retains its explicit recovery gate. A clean OFF stops the service. This does not
+override a user's Android Force Stop. See the [Service lifecycle](https://developer.android.com/reference/android/app/Service#START_STICKY).
+Fatal start/engine/cleanup failures retain a durable manual-recovery reason, so
+owner recreation cannot silently launch a new engine after such a failure. A
+validated healthy owned engine can still be adopted. Explicit OFF and confirmed
+OFF cleanup clear the gate. Gate writes are tied to the last accepted OFF request;
+an obsolete operation cannot re-block a newer OFF/ON request.
 The UI saves the requested choice; controller callbacks publish progress and errors.
 OFF acceptance atomically saves a unique pending token before service dispatch.
 Intents only wake reconciliation of the latest persisted choice. Successful Stop

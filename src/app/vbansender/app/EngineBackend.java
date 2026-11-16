@@ -112,10 +112,24 @@ final class EngineBackend implements AudioController.Backend {
 
     @Override
     public void start(BooleanSupplier stillEnabled) throws Exception {
+        String acceptedOff = prefs.getString("accepted_off_token", "");
+        try {
+            startOwned(stillEnabled);
+        } catch (AudioController.NetworkUnavailableException | CancellationException
+                | ManualRecoveryRequiredException expected) {
+            throw expected;
+        } catch (Exception error) {
+            if (stillEnabled.getAsBoolean()) requireManualRecovery(error, acceptedOff);
+            throw error;
+        }
+    }
+
+    private void startOwned(BooleanSupplier stillEnabled) throws Exception {
         AudioController.Request requested = AppConfig.request(prefs);
         if (requested.cleanupPending || !requested.offToken.isEmpty()) {
             throw new IllegalStateException("Previous cleanup is incomplete. Turn OFF, then ON to retry.");
         }
+        if (prefs.getString("active_run", "").isEmpty()) checkManualRecovery();
         OutputConfig config = AppConfig.read(context);
         requireNetwork(config.destination.getAddress());
         if (!stillEnabled.getAsBoolean()) {
@@ -158,8 +172,10 @@ final class EngineBackend implements AudioController.Backend {
                     + " ]; then echo ENABLED; fi").trim())) {
                 throw new IllegalStateException("Previous engine is stopping; retry after OFF");
             }
+            check();
             return;
         }
+        checkManualRecovery();
         if (!previous.isEmpty()) {
             shell("rm -f " + marker(previous));
         }
@@ -214,11 +230,13 @@ final class EngineBackend implements AudioController.Backend {
                 || "ERROR".equals(started.state) || "STOPPED".equals(started.state)) {
             throw new IllegalStateException(started == null ? "Engine did not start" : started.message);
         }
+        check();
     }
 
     @Override
     public void stop() throws Exception {
         failedCleanupToken = "";
+        String acceptedOff = prefs.getString("accepted_off_token", "");
         String token = AppConfig.beginCleanup(prefs);
         long deadline = nanoTime.getAsLong() + STOP_BUDGET_NANOS;
         try {
@@ -245,12 +263,26 @@ final class EngineBackend implements AudioController.Backend {
             AppConfig.finishCleanup(prefs, token);
         } catch (Exception error) {
             failedCleanupToken = token;
+            requireManualRecovery(error, acceptedOff);
             throw error;
         }
     }
 
     @Override
     public void check() throws Exception {
+        String acceptedOff = prefs.getString("accepted_off_token", "");
+        boolean cleanupPending = !prefs.getString("pending_off_token", "").isEmpty();
+        try {
+            checkOwned();
+        } catch (AudioController.NetworkUnavailableException | IOException transientFailure) {
+            throw transientFailure;
+        } catch (Exception error) {
+            if (!cleanupPending) requireManualRecovery(error, acceptedOff);
+            throw error;
+        }
+    }
+
+    private void checkOwned() throws Exception {
         String snapshot = shell(statusCommand());
         EngineState state = EngineState.parse(snapshot);
         String run = prefs.getString("active_run", "");
@@ -274,7 +306,28 @@ final class EngineBackend implements AudioController.Backend {
             }
         }
         requireNetwork(AppConfig.read(context).destination.getAddress());
-        prefs.edit().putString("engine_snapshot", snapshot).apply();
+        prefs.edit().putString("engine_snapshot", snapshot).remove("manual_recovery_error").apply();
+    }
+
+    private void requireManualRecovery(Exception error, String acceptedOff) {
+        synchronized (AppConfig.CONTROL_LOCK) {
+            // An explicit newer OFF owns recovery; an obsolete result must not
+            // re-block the subsequent ON after its cleanup has been accepted.
+            if (!acceptedOff.equals(prefs.getString("accepted_off_token", ""))) return;
+            AppConfig.save(prefs.edit().putString("manual_recovery_error",
+                    error.getClass().getSimpleName() + ": " + error.getMessage()));
+        }
+    }
+
+    private void checkManualRecovery() {
+        String reason = prefs.getString("manual_recovery_error", "");
+        if (!reason.isEmpty()) throw new ManualRecoveryRequiredException(reason);
+    }
+
+    private static final class ManualRecoveryRequiredException extends IllegalStateException {
+        ManualRecoveryRequiredException(String reason) {
+            super("Previous failure requires OFF, then ON: " + reason);
+        }
     }
 
     private void requireNetwork(java.net.InetAddress destination) throws AudioController.NetworkUnavailableException {

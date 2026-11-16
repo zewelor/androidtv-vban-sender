@@ -49,6 +49,12 @@ public final class VbanService extends Service {
         manager.createNotificationChannel(new NotificationChannel("vban", "VBAN audio routing",
                 NotificationManager.IMPORTANCE_LOW));
         startForeground(2, notification("Preparing audio routing"));
+        SharedPreferences saved = AppConfig.prefs(this);
+        if (AppConfig.needsReconcile(this)) {
+            boolean cleanup = !saved.getString("pending_off_token", "").isEmpty()
+                    || saved.getBoolean("cleanup_pending", false) || !saved.getBoolean("enabled", false);
+            AppConfig.save(saved.edit().putString("controller_state", cleanup ? "STOPPING" : "STARTING"));
+        }
         network = new NetworkMonitor(this, main, new Runnable() {
             @Override public void run() {
                 if (destroyed) return;
@@ -73,7 +79,7 @@ public final class VbanService extends Service {
                 if (state == AudioController.State.ON || state == AudioController.State.WAITING_NETWORK
                         || state == AudioController.State.OFF
                         && !prefs.getBoolean("enabled", false)) {
-                    update.remove("last_error");
+                    update.remove("last_error").remove("last_error_summary");
                 }
                 AppConfig.save(update);
                 main.post(new Runnable() {
@@ -112,7 +118,8 @@ public final class VbanService extends Service {
                 }
                 Log.e("VBAN", "Audio control failed", error);
                 AppConfig.save(AppConfig.prefs(VbanService.this).edit().putString("last_error",
-                        error.getClass().getSimpleName() + ": " + error.getMessage()));
+                        error.getClass().getSimpleName() + ": " + error.getMessage())
+                        .putString("last_error_summary", AppConfig.errorSummary(error)));
                 main.post(new Runnable() {
                     @Override
                     public void run() {
@@ -135,16 +142,25 @@ public final class VbanService extends Service {
         SharedPreferences prefs = AppConfig.prefs(this);
         boolean off = !prefs.getBoolean("enabled", false) && controller.isOff();
         if (off && prefs.contains("last_error")) {
-            AppConfig.save(prefs.edit().remove("last_error"));
+            AppConfig.save(prefs.edit().remove("last_error").remove("last_error_summary"));
         }
         String state = prefs.getString("controller_state", "OFF");
         boolean failed = !prefs.getString("last_error", "").isEmpty();
         boolean waiting = prefs.getBoolean("enabled", false) && "WAITING_NETWORK".equals(state) && !failed;
-        getSystemService(NotificationManager.class).notify(2,
-                notification(failed ? "Error — open VBAN for details"
-                        : waiting ? "Waiting for network — retry in "
-                                + AppConfig.networkRetrySeconds(prefs, SystemClock.uptimeMillis()) + " s"
-                        : "ON".equals(state) ? "Automatic audio routing enabled" : state));
+        String message;
+        if (failed) {
+            message = "Audio routing needs attention — open VBAN";
+        } else if (waiting) {
+            long seconds = AppConfig.networkRetrySeconds(prefs, SystemClock.uptimeMillis());
+            message = seconds == 0 ? "Retrying connection…" : "Waiting for network — retry in " + seconds + " s";
+        } else if (!prefs.getBoolean("enabled", false)) {
+            message = off ? "Audio via standard output" : "Restoring standard audio";
+        } else if ("ON".equals(state)) {
+            message = "Automatic audio routing ready";
+        } else {
+            message = "STOPPING".equals(state) ? "Restoring standard audio" : "Starting audio routing";
+        }
+        getSystemService(NotificationManager.class).notify(2, notification(message));
         if (waiting) main.postDelayed(countdown, 1000);
         if (off && stopSelfResult(latestStart)) {
             stopForeground(STOP_FOREGROUND_REMOVE);
@@ -165,7 +181,9 @@ public final class VbanService extends Service {
         latestStart = startId;
         controller.reconcileSaved();
         publishCurrentState();
-        return START_NOT_STICKY;
+        // Recreate supervision after process death while ON or while an accepted
+        // OFF still needs cleanup. Persisted requests also handle a null Intent.
+        return AppConfig.needsReconcile(this) ? START_STICKY : START_NOT_STICKY;
     }
 
     @Override

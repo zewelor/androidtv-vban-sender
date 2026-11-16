@@ -34,9 +34,20 @@ PCM. Use a trusted network and keep ADB inaccessible from the internet.
 
 ## Use
 
-The button shows your choice: green **ON** or dark gray **OFF**, with white text.
-A white outline marks remote-control focus. Press to switch. Closing the screen
-keeps VBAN enabled; the choice is saved for the next reboot.
+The large control shows the current state. A white outline marks remote-control focus.
+
+| State | Meaning / remote-control action |
+|---|---|
+| Gray **OFF** | Standard output; press OK to enable VBAN |
+| Amber **STARTING…** | Preparing routing; press OK to cancel |
+| Amber **WAITING** | Network unavailable; countdown shows the next retry; press OK to turn off |
+| Green **ON** | Automatic routing is ready; press OK to turn off |
+| Amber **STOPPING…** | Restoring standard output; wait until cleanup finishes |
+| Red **ERROR / RETRY OFF** | Follow the displayed recovery action; technical details are in Settings |
+
+Closing the screen keeps VBAN enabled; the choice is saved for the next reboot.
+Only confirmed readiness is green. An expired countdown shows that a connection
+is being retried, rather than staying at zero seconds.
 
 | Choice | Foreground app | Audio route |
 |---|---|---|
@@ -62,8 +73,11 @@ after OFF is confirmed.
 ## Troubleshooting
 
 Temporary detector timeouts and invalidated audio recorders recover automatically.
+Network loss waits and retries automatically, starting at 10 seconds and increasing
+to at most 5 minutes. A stable route-change event can wake the retry sooner.
 Other engine errors appear on the screen and notification after the next status check
-(every 15 seconds while the service runs). After an error, switch OFF → ON.
+(every 15 seconds while the service runs). Follow the displayed OFF/retry action;
+Settings retains the technical error for diagnosis.
 Changing audio routes can interrupt playback;
 Prime or Netflix may require restarting the content.
 For Prime on the tested Android 12 firmware, enable VBAN before opening the film.

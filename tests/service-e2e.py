@@ -86,7 +86,7 @@ public class Notification {
     "android/app/Service.java": """
 package android.app;
 public class Service extends android.content.Context {
- public static final int STOP_FOREGROUND_REMOVE=1, START_NOT_STICKY=2;
+ public static final int STOP_FOREGROUND_REMOVE=1, START_STICKY=1, START_NOT_STICKY=2;
  public int serverStart; public boolean stopped,foreground=true;
  public void onCreate() { } public void onDestroy() { }
  public int onStartCommand(android.content.Intent i,int flags,int id){return 0;}
@@ -139,7 +139,7 @@ def main():
                    + [str(ROOT / "src/app/vbansender" / p) for p in actual]
                    + [str(ROOT / "tests" / p) for p in ("ServiceHarness.java", "MemoryPrefs.java")], check=True)
     results = {}
-    for scenario in ("network_cleanup_event", "network_retry", "delayed_commands", "failed_stop", "stale_off", "shutdown_rejected",
+    for scenario in ("restart_policy", "network_cleanup_event", "network_retry", "delayed_commands", "failed_stop", "stale_off", "shutdown_rejected",
                      "off_on_during_check", "replacement_during_start", "replacement_with_pending_off",
                      "replacement_cleanup_fails", "new_off_before_failed_stop"):
         result = subprocess.run(["java", "-cp", str(classes), "app.vbansender.app.ServiceHarness", scenario],

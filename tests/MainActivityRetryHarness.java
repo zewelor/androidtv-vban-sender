@@ -24,11 +24,17 @@ public final class MainActivityRetryHarness {
             AppConfig.save(prefs.edit().putBoolean("enabled", true)
                     .putString("controller_state", "WAITING_NETWORK").putString("network_retry_seconds", "300")
                     .putString("network_retry_at_uptime_ms", Long.toString(android.os.SystemClock.now + 300000)));
+        } else if (scenario.equals("failed_stop_requested_on")) {
+            AppConfig.save(prefs.edit().putBoolean("enabled", true).putBoolean("cleanup_pending", true)
+                    .putString("controller_state", "STOPPING").putString("last_error", "IOException: cleanup failed"));
+        } else if (scenario.equals("state_transitions")) {
+            AppConfig.save(prefs.edit().putBoolean("enabled", true).putString("controller_state", "STARTING"));
         } else if (scenario.equals("ordinary_off")) {
             AppConfig.save(prefs.edit().putBoolean("enabled", false));
         } else if (scenario.equals("failed_start")) {
             AppConfig.save(prefs.edit().putBoolean("enabled", true)
-                    .putString("last_error", "IOException: start failed"));
+                    .putString("last_error", "IOException: start failed")
+                    .putString("last_error_summary", AppConfig.errorSummary(new java.io.IOException("ADB unavailable"))));
         } else if (scenario.equals("off_error_without_pending")) {
             AppConfig.save(prefs.edit().putBoolean("enabled", false)
                     .putString("last_error", "IOException: status read failed"));
@@ -47,7 +53,7 @@ public final class MainActivityRetryHarness {
             require("RETRY OFF".contentEquals(button.getText()),
                     "Failed OFF cleanup must label the control RETRY OFF; got " + button.getText());
             require(button.isEnabled(), "OFF cleanup retry must not require valid ON configuration");
-            require(status.getText().toString().contains("Retry OFF to finish cleanup."),
+            require(status.getText().toString().contains("Press OK to retry"),
                     "Failed OFF cleanup must explain that OFF is the retry action: " + status.getText());
             if (scenario.equals("retry_displayed_after_cleanup")) {
                 // Worker persistence can finish before its queued UI refresh runs.
@@ -61,7 +67,7 @@ public final class MainActivityRetryHarness {
                     && !prefs.getString("pending_off_token", "").isEmpty(),
                     "OFF retry did not preserve the saved OFF choice and create a fresh obligation");
         } else if (scenario.equals("network_wait")) {
-            require("ON".contentEquals(button.getText()) && status.getText().toString().contains("Waiting for network")
+            require("WAITING".contentEquals(button.getText()) && status.getText().toString().contains("Retrying in")
                     && status.getText().toString().contains("300 s"), "Waiting state or retry interval missing");
             activity.onPause();
             android.os.SystemClock.now += 1500;
@@ -76,22 +82,44 @@ public final class MainActivityRetryHarness {
             require(android.os.Handler.delayed.isEmpty(), "Paused activity retained countdown ticks");
             android.os.SystemClock.now += 400000;
             activity.onResume();
-            require(status.getText().toString().contains("0 s"), "Expired countdown became negative");
+            require(status.getText().toString().contains("Retrying connection…"), "Expired countdown did not show progress");
             button.performClick();
             require(Boolean.FALSE.equals(VbanService.lastEnabled), "Waiting network did not allow OFF");
+        } else if (scenario.equals("failed_stop_requested_on")) {
+            require("ERROR".contentEquals(button.getText()) && button.isEnabled(), "Cleanup failure blocked OFF recovery");
+            button.performClick();
+            require(Boolean.FALSE.equals(VbanService.lastEnabled), "Failed cleanup did not request a fresh OFF");
+        } else if (scenario.equals("state_transitions")) {
+            String[] states = {"STARTING", "ON", "WAITING_NETWORK", "STOPPING"};
+            String[] labels = {"STARTING…", "ON", "WAITING", "STOPPING…"};
+            for (int i = 0; i < states.length; i++) {
+                AppConfig.save(prefs.edit().putString("controller_state", states[i]));
+                activity.onPause(); activity.onResume();
+                require(labels[i].contentEquals(button.getText()), "Misleading label for " + states[i] + ": " + button.getText());
+                int color = ((android.graphics.drawable.StateListDrawable) button.background).color;
+                require((color == android.graphics.Color.rgb(35,110,71)) == "ON".equals(states[i]),
+                        "Only ready ON may be green: " + states[i]);
+                require(button.isEnabled() == !"STOPPING".equals(states[i]), "Wrong cancellation availability: " + states[i]);
+            }
+            AppConfig.save(prefs.edit().putString("controller_state", "STARTING"));
+            activity.onPause(); activity.onResume();
+            button.performClick();
+            require(Boolean.FALSE.equals(VbanService.lastEnabled), "Starting could not be cancelled");
         } else if (scenario.equals("ordinary_off")) {
             require("OFF".contentEquals(button.getText()), "Ordinary OFF label changed");
             button.performClick();
             require(Boolean.TRUE.equals(VbanService.lastEnabled), "Ordinary OFF did not request ON");
             require(prefs.getBoolean("enabled", false), "ON choice was not persisted");
         } else if (scenario.equals("failed_start")) {
-            require(status.getText().toString().contains("Turn OFF, then ON to retry."),
+            require("ERROR".contentEquals(button.getText()) && !status.getText().toString().contains("IOException")
+                    && status.getText().toString().contains("Android audio service")
+                    && status.getText().toString().contains("Press OK to turn VBAN off"),
                     "Failed start instructions must match saved ON state: " + status.getText());
             button.performClick();
             require(Boolean.FALSE.equals(VbanService.lastEnabled), "Failed ON recovery did not request OFF");
             require(!prefs.getBoolean("enabled", true), "OFF recovery choice was not persisted");
         } else {
-            require(status.getText().toString().contains("Turn ON to retry."),
+            require(status.getText().toString().contains("Press OK to try again"),
                     "An OFF state without pending cleanup must direct the user to ON: " + status.getText());
         }
         System.out.println("MAIN_ACTIVITY_RETRY_PASS: " + scenario);

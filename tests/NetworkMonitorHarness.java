@@ -15,6 +15,7 @@ public final class NetworkMonitorHarness {
     public static void main(String[] args) throws Exception {
         disconnectedStartupAndLanWithoutInternet();
         initialSnapshotAndDefaultSwitch();
+        coalescesMeaningfulBurst();
         liveQueryRecoversFromMissedCallbacks();
         closeIgnoresQueuedCallbacks();
         routeTypesAtApi33();
@@ -122,9 +123,12 @@ public final class NetworkMonitorHarness {
 
         manager.emitLinkProperties(network,
                 properties(route("192.168.60.0", 24, RouteInfo.RTN_UNICAST)));
+        handler.runCurrent();
         int beforeClose = changed.count;
+        require(handler.pendingCount() == 1, "route change did not queue a delayed notification");
         monitor.close();
         monitor.close();
+        require(handler.pendingCount() == 0, "close did not cancel the delayed notification");
         handler.runAll();
         require(!monitor.hasRoute(destination), "closed monitor continued exposing cached routes");
         require(changed.count == beforeClose, "queued callback notified after close");
@@ -148,6 +152,51 @@ public final class NetworkMonitorHarness {
         manager.properties.put(wifi, properties(route("192.168.60.0", 24, RouteInfo.RTN_UNICAST)));
         require(!monitor.hasRoute(ip("192.168.50.20")),
                 "live route query retained stale routes when the link-properties callback was missed");
+        monitor.close();
+    }
+
+    private static void coalescesMeaningfulBurst() throws Exception {
+        Build.VERSION.SDK_INT = 31;
+        Network wifi = network(15);
+        Network cellular = network(16);
+        ConnectivityManager manager = new ConnectivityManager();
+        manager.active = wifi;
+        manager.properties.put(wifi, properties(route("192.168.50.0", 24, RouteInfo.RTN_UNICAST)));
+        Handler handler = new Handler();
+        Counter changed = new Counter();
+        NetworkMonitor monitor = new NetworkMonitor(new Context(manager), handler, changed);
+
+        manager.emitAvailable(cellular);
+        handler.runCurrent();
+        require(!monitor.hasRoute(ip("192.168.50.20")),
+                "cached route state did not update immediately on default-network change");
+
+        handler.advanceBy(100);
+        manager.emitLinkProperties(cellular,
+                properties(route("192.168.60.0", 24, RouteInfo.RTN_UNICAST)));
+        handler.runCurrent();
+        require(monitor.hasRoute(ip("192.168.60.20")),
+                "live hasRoute query did not see the latest route before notification");
+        require(!monitor.hasRoute(ip("192.168.50.20")),
+                "live hasRoute query retained the previous default network route");
+
+        handler.advanceBy(200);
+        manager.emitLinkProperties(cellular,
+                properties(route("192.168.70.0", 24, RouteInfo.RTN_UNICAST)));
+        handler.runCurrent();
+        require(monitor.hasRoute(ip("192.168.70.20")),
+                "latest route was not visible immediately after its callback");
+
+        handler.advanceBy(100);
+        manager.emitLinkProperties(cellular,
+                properties(route("192.168.70.0", 24, RouteInfo.RTN_UNICAST)));
+        handler.runCurrent();
+        handler.advanceBy(149);
+        require(changed.count == 0,
+                "route burst emitted callbacks before the quiet period: " + changed.count);
+        handler.advanceBy(1);
+        require(changed.count == 1,
+                "meaningful route burst did not coalesce into one notification: " + changed.count);
         monitor.close();
     }
 

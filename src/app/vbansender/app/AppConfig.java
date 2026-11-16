@@ -24,7 +24,11 @@ final class AppConfig {
     static void accept(SharedPreferences prefs, boolean enabled) {
         synchronized (CONTROL_LOCK) {
             SharedPreferences.Editor edit = prefs.edit().putBoolean("enabled", enabled);
-            if (!enabled) edit.putString("pending_off_token", java.util.UUID.randomUUID().toString());
+            if (!enabled) {
+                String token = java.util.UUID.randomUUID().toString();
+                edit.putString("pending_off_token", token).putString("accepted_off_token", token)
+                        .remove("manual_recovery_error");
+            }
             save(edit);
         }
     }
@@ -43,6 +47,7 @@ final class AppConfig {
             SharedPreferences.Editor edit = prefs.edit().remove("active_run")
                     .remove("original_surround").remove("cleanup_pending").remove("engine_snapshot");
             if (token.equals(prefs.getString("pending_off_token", ""))) edit.remove("pending_off_token");
+            if (!prefs.getBoolean("enabled", false)) edit.remove("manual_recovery_error");
             save(edit);
         }
     }
@@ -90,5 +95,12 @@ final class AppConfig {
         if (deadline.isEmpty()) return Long.parseLong(prefs.getString("network_retry_seconds", "10"));
         long remaining = Long.parseLong(deadline) - uptimeMillis;
         return remaining <= 0 ? 0 : (remaining + 999) / 1000;
+    }
+
+    static String errorSummary(Exception error) {
+        if (error instanceof IllegalArgumentException) return "Check the receiver settings in Settings.";
+        if (error instanceof java.io.IOException) return "Cannot communicate with the Android audio service. See Settings for details.";
+        if (error instanceof SecurityException) return "Android denied access. See Settings for details.";
+        return "Audio routing needs attention. See Settings for details.";
     }
 }

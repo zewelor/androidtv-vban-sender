@@ -13,8 +13,12 @@ import java.util.List;
 
 /** Tracks default-network route changes and checks the live route on backend requests. */
 final class NetworkMonitor implements AutoCloseable {
+    private static final long CHANGE_QUIET_PERIOD_MS = 250L;
+
     private final ConnectivityManager connectivity;
+    private final Handler handler;
     private final Runnable onChanged;
+    private final Runnable notifyChanged;
     private final ConnectivityManager.NetworkCallback callback;
     private volatile Snapshot cached;
     private volatile boolean closed;
@@ -27,7 +31,15 @@ final class NetworkMonitor implements AutoCloseable {
         if (handler == null || onChanged == null) {
             throw new NullPointerException("handler and onChanged are required");
         }
+        this.handler = handler;
         this.onChanged = onChanged;
+        notifyChanged = new Runnable() {
+            @Override public void run() {
+                synchronized (NetworkMonitor.this) {
+                    if (!closed) NetworkMonitor.this.onChanged.run();
+                }
+            }
+        };
         callback = new ConnectivityManager.NetworkCallback() {
             @Override public void onAvailable(Network network) {
                 NetworkMonitor.this.onAvailable(network);
@@ -80,7 +92,7 @@ final class NetworkMonitor implements AutoCloseable {
         Snapshot previous = cached;
         if (network.equals(previous.network)) return;
         cached = new Snapshot(network, null);
-        if (!routes(previous.properties).isEmpty()) onChanged.run();
+        if (!routes(previous.properties).isEmpty()) scheduleChanged();
     }
 
     private synchronized void onLinkPropertiesChanged(Network network, LinkProperties properties) {
@@ -88,7 +100,7 @@ final class NetworkMonitor implements AutoCloseable {
         Snapshot previous = cached;
         if (!network.equals(previous.network)) return;
         cached = new Snapshot(network, properties);
-        if (!routes(previous.properties).equals(routes(properties))) onChanged.run();
+        if (!routes(previous.properties).equals(routes(properties))) scheduleChanged();
     }
 
     private synchronized void onLost(Network network) {
@@ -96,7 +108,12 @@ final class NetworkMonitor implements AutoCloseable {
         Snapshot previous = cached;
         if (!network.equals(previous.network)) return;
         cached = Snapshot.empty();
-        if (!routes(previous.properties).isEmpty()) onChanged.run();
+        if (!routes(previous.properties).isEmpty()) scheduleChanged();
+    }
+
+    private void scheduleChanged() {
+        handler.removeCallbacks(notifyChanged);
+        handler.postDelayed(notifyChanged, CHANGE_QUIET_PERIOD_MS);
     }
 
     private static List<RouteInfo> routes(LinkProperties properties) {
@@ -113,6 +130,7 @@ final class NetworkMonitor implements AutoCloseable {
         if (closed) return;
         closed = true;
         cached = Snapshot.empty();
+        handler.removeCallbacks(notifyChanged);
         connectivity.unregisterNetworkCallback(callback);
     }
 

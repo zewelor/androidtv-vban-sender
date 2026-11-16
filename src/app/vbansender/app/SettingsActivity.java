@@ -21,6 +21,7 @@ public final class SettingsActivity extends Activity {
     private EditText frames;
     private Button save;
     private TextView status;
+    private TextView diagnostics;
     private LinearLayout layout;
     private SharedPreferences prefs;
 
@@ -81,6 +82,9 @@ public final class SettingsActivity extends Activity {
                 + "Netflix and Home use standard output. Receiver discovery is not used.");
         audio.setTextSize(18);
         layout.addView(audio);
+        diagnostics = new TextView(this);
+        diagnostics.setTextSize(16);
+        layout.addView(diagnostics);
         scroll.addView(layout);
         setContentView(scroll);
         receiver.requestFocus();
@@ -123,5 +127,8 @@ public final class SettingsActivity extends Activity {
                 : getSharedPreferences("proof", MODE_PRIVATE).getBoolean("authorized", false)
                     ? "Local ADB ready. Save the receiver, then return to VBAN."
                     : "Save the receiver and use Local ADB / developer tools to authorize this app.");
+        String error = prefs.getString("last_error", "");
+        if (error.isEmpty()) error = prefs.getString("manual_recovery_error", "");
+        diagnostics.setText(error.isEmpty() ? "" : "Technical details\n" + error);
     }
 }

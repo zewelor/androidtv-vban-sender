@@ -34,6 +34,7 @@ public final class ServiceHarness {
         ServiceHarness h = new ServiceHarness();
         try {
             switch (args[0]) {
+                case "restart_policy": h.restartPolicy(); break;
                 case "network_retry": h.networkRetry(); break;
                 case "network_cleanup_event": h.networkCleanupEvent(); break;
                 case "new_off_before_failed_stop": h.newOffBeforeFailedStop(); break;
@@ -50,6 +51,42 @@ public final class ServiceHarness {
             System.out.println(args[0] + " PASS");
         } finally { h.backend.releaseStart.countDown(); h.backend.releaseCheck.countDown();
             h.backend.releaseStop.countDown(); h.service.onDestroy(); }
+    }
+
+    private void restartPolicy() throws Exception {
+        AppConfig.save(prefs.edit().putBoolean("enabled", true));
+        service.serverStart = ++startId;
+        int policy = service.onStartCommand(null, 0, startId);
+        require(policy == android.app.Service.START_STICKY, "Saved ON does not request system recreation");
+        await(() -> "ON".equals(prefs.getString("controller_state", "")), "initial ON");
+        service.onDestroy();
+        VbanService restarted = new VbanService(); restarted.onCreate();
+        try {
+            restarted.serverStart = ++startId;
+            require(restarted.onStartCommand(null, 0, startId) == android.app.Service.START_STICKY,
+                    "null-intent restart lost saved ON");
+            await(() -> backend.starts.get() == 2 && "ON".equals(prefs.getString("controller_state", "")), "adopted engine");
+            require(backend.created.get() == 1 && backend.stops.get() == 0,
+                    "owner recreation stopped or duplicated a healthy engine");
+            backend.blockStop = true;
+            choose(false);
+            restarted.serverStart = ++startId;
+            int offPolicy = restarted.onStartCommand(Context.commands.get(command++), 0, startId);
+            require(offPolicy == android.app.Service.START_STICKY, "Pending OFF cleanup has no restart protection");
+            require(backend.stopping.await(3, TimeUnit.SECONDS), "pending OFF cleanup did not begin");
+            backend.releaseStop.countDown();
+            await(() -> "OFF".equals(prefs.getString("controller_state", ""))
+                    && prefs.getString("pending_off_token", "").isEmpty(), "confirmed OFF");
+            drain();
+        } finally { backend.releaseStop.countDown(); restarted.onDestroy(); }
+        VbanService off = new VbanService(); off.onCreate();
+        try {
+            off.serverStart = ++startId;
+            off.onStartCommand(null, 0, startId);
+            await(() -> { drain(); return off.stopped; }, "OFF owner shutdown");
+            require(backend.created.get() == 1 && backend.starts.get() == 2 && !backend.active.get(),
+                    "OFF recreation started audio again");
+        } finally { off.onDestroy(); }
     }
 
     private void networkCleanupEvent() throws Exception {
@@ -140,7 +177,7 @@ public final class ServiceHarness {
         Thread.sleep(100);
         require(backend.stops.get() == 1 && backend.starts.get() == 1, "ON retried a failed token");
         choose(false); deliver();
-        await(() -> controllerUncheckedOff(), "fresh OFF retry");
+        await(() -> confirmedOff(), "fresh OFF retry");
         require(backend.stops.get() == 2, "fresh OFF failed to retry cleanup");
     }
 
@@ -162,6 +199,7 @@ public final class ServiceHarness {
         backend.failStop.set(true);
         choose(false); deliver();
         await(() -> !prefs.getString("last_error", "").isEmpty(), "Stop error");
+        require(!prefs.getString("last_error_summary", "").isEmpty(), "Error lacks a user-facing explanation");
         choose(true);
         require("STOPPING".equals(prefs.getString("controller_state", ""))
                 && !prefs.getString("last_error", "").isEmpty(), "UI erased failed cleanup and published a fake STARTING");
@@ -199,13 +237,18 @@ public final class ServiceHarness {
         require(!service.stopped && service.foreground, "foreground removed after rejected shutdown");
         choose(false); deliver();
         drain();
-        await(() -> controllerUncheckedOff(), "repeated OFF cleanup");
+        await(() -> confirmedOff(), "repeated OFF cleanup");
         drain();
         require(service.stopped && !service.foreground, "repeated confirmed OFF did not finish shutdown");
     }
 
-    private boolean controllerUncheckedOff() {
-        try { return controller().isOff(); } catch (Exception e) { throw new AssertionError(e); }
+    private boolean confirmedOff() {
+        try {
+            return !prefs.getBoolean("enabled", false) && "OFF".equals(prefs.getString("controller_state", ""))
+                    && prefs.getString("pending_off_token", "").isEmpty()
+                    && !prefs.getBoolean("cleanup_pending", false) && !backend.active.get()
+                    && (service.stopped || controller().isOff());
+        } catch (Exception e) { throw new AssertionError(e); }
     }
 
     private AudioController controller() throws Exception {
@@ -312,6 +355,7 @@ public final class ServiceHarness {
 
     private static final class Backend implements AudioController.Backend {
         final AtomicInteger starts = new AtomicInteger(), stops = new AtomicInteger();
+        final AtomicInteger created = new AtomicInteger();
         final AtomicBoolean active = new AtomicBoolean(), failStop = new AtomicBoolean();
         final AtomicBoolean cleanupPending = new AtomicBoolean();
         final CountDownLatch releaseStart = new CountDownLatch(1), releaseCheck = new CountDownLatch(1), checking = new CountDownLatch(1);
@@ -325,7 +369,7 @@ public final class ServiceHarness {
             int start = starts.incrementAndGet();
             if (!networkAvailable) throw new AudioController.NetworkUnavailableException("Network unreachable");
             events.add("start-" + start);
-            active.set(true);
+            if (!active.getAndSet(true)) created.incrementAndGet();
             if (start == 2) secondStart.countDown();
             if (start == 1 && blockStart) require(releaseStart.await(3, TimeUnit.SECONDS), "start release");
         }

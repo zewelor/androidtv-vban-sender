@@ -20,12 +20,17 @@ public final class BackendCleanupHarness {
     private static boolean markerCreated;
     private static boolean foreignOwner;
     private static int startupSurroundWrites;
+    private static Runnable beforeIdentity;
+    private static Runnable beforeHealthRead;
     public static String command(String command) throws Exception {
         return command(command, 10000);
     }
 
     public static String command(String command, int timeout) throws Exception {
         commands++;
+        if (command.equals("id") && beforeIdentity != null) {
+            Runnable action = beforeIdentity; beforeIdentity = null; action.run();
+        }
         if (starting) {
             if (command.equals("id")) return "uid=2000(shell)";
             if (command.startsWith("if [ -f ")) {
@@ -58,7 +63,11 @@ public final class BackendCleanupHarness {
             }
             throw new AssertionError("Unexpected startup operation: " + command);
         }
-        if (health && command.startsWith("if [ -f ")) return healthStatus;
+        if (health && command.contains("then echo ENABLED")) return "ENABLED";
+        if (health && command.startsWith("if [ -f ")) {
+            if (beforeHealthRead != null) { Runnable action = beforeHealthRead; beforeHealthRead = null; action.run(); }
+            return healthStatus;
+        }
         if (health && command.contains("/cmdline")) {
             if (!healthAlive) return "";
             return "app.vbansender.AudioEngine\n0123456789abcdef0123456789abcdef";
@@ -95,6 +104,8 @@ public final class BackendCleanupHarness {
 
     public static void main(String[] args) throws Exception {
         missingNetworkDoesNotLaunch();
+        fatalFailureSurvivesOwnerRecreation();
+        obsoleteFailureDoesNotBlockRecoveredRequest();
         if (args.length == 1 && "startup".equals(args[0])) {
             startClearsStaleStopBeforeEnabling();
             return;
@@ -155,6 +166,82 @@ public final class BackendCleanupHarness {
         startClearsStaleStopBeforeEnabling();
         startPreservesForeignStop();
         System.out.println("BACKEND_CLEANUP_PASS");
+    }
+
+    private static void obsoleteFailureDoesNotBlockRecoveredRequest() throws Exception {
+        MemoryPrefs prefs = new MemoryPrefs(); Context.prefs = prefs;
+        AppConfig.save(prefs.edit().putBoolean("enabled", true).putString("receiver", "192.0.2.1"));
+        java.util.concurrent.atomic.AtomicBoolean currentStart = new java.util.concurrent.atomic.AtomicBoolean(true);
+        beforeIdentity = () -> {
+            AppConfig.accept(prefs, false); AppConfig.accept(prefs, true);
+            currentStart.set(false);
+            throw new IllegalStateException("Obsolete start failed after newer OFF/ON");
+        };
+        try { new EngineBackend(new Context()).start(currentStart::get); throw new AssertionError("Expected old start failure"); }
+        catch (IllegalStateException expected) { }
+        require(prefs.getString("manual_recovery_error", "").isEmpty(), "Obsolete start reinstated a cleared recovery gate");
+        new EngineBackend(new Context()).stop();
+
+        String run = "0123456789abcdef0123456789abcdef";
+        AppConfig.save(prefs.edit().putString("active_run", run));
+        health = true; healthAlive = true;
+        healthStatus = "run=" + run + " uid=2000 pid=123 state=ERROR message=Obsolete engine failure";
+        beforeHealthRead = () -> { AppConfig.accept(prefs, false); AppConfig.accept(prefs, true); };
+        try { new EngineBackend(new Context()).check(); throw new AssertionError("Expected old health failure"); }
+        catch (IllegalStateException expected) { }
+        require(prefs.getString("manual_recovery_error", "").isEmpty(), "Obsolete health result blocked the newer accepted request");
+        try { new EngineBackend(new Context()).check(); throw new AssertionError("Expected in-flight health failure"); }
+        catch (IllegalStateException expected) { }
+        require(prefs.getString("manual_recovery_error", "").isEmpty(), "Check beginning after accepted OFF reinstated recovery gate");
+        healthAlive = false;
+        boolean originalFailMarker = failMarker; failMarker = false;
+        try { new EngineBackend(new Context()).stop(); }
+        finally { failMarker = originalFailMarker; }
+        health = false; healthAlive = true;
+        starting = true; markerCreated = false; staleStop = true;
+        try { new EngineBackend(new Context()).start(() -> true); }
+        finally { starting = false; }
+        require(markerCreated, "New ON did not start after stale-result cleanup");
+    }
+
+    private static void fatalFailureSurvivesOwnerRecreation() throws Exception {
+        MemoryPrefs prefs = new MemoryPrefs(); Context.prefs = prefs;
+        AppConfig.save(prefs.edit().putBoolean("enabled", true).putString("receiver", "invalid"));
+        try { new EngineBackend(new Context()).start(() -> true); throw new AssertionError("Invalid receiver accepted"); }
+        catch (IllegalArgumentException expected) { }
+        require(!prefs.getString("manual_recovery_error", "").isEmpty(), "Fatal startup failure was not retained durably");
+        new EngineBackend(new Context()).stop(); // Internal cleanup while saved ON must keep the gate.
+        AppConfig.save(prefs.edit().putString("receiver", "192.0.2.1"));
+        int before = commands;
+        try { new EngineBackend(new Context()).start(() -> true); throw new AssertionError("Fatal startup retried after owner recreation"); }
+        catch (IllegalStateException expected) { require(expected.getMessage().contains("requires OFF"), "Wrong recovery gate"); }
+        require(commands == before, "Blocked fresh launch accessed ADB");
+        AppConfig.accept(prefs, false);
+        new EngineBackend(new Context()).stop();
+        require(prefs.getString("manual_recovery_error", "").isEmpty(), "Confirmed explicit OFF did not allow recovery");
+        AppConfig.accept(prefs, true);
+        starting = true; markerCreated = false; staleStop = true;
+        try { new EngineBackend(new Context()).start(() -> true); }
+        finally { starting = false; }
+        require(markerCreated, "Explicit recovery could not start audio");
+
+        String run = "0123456789abcdef0123456789abcdef";
+        AppConfig.save(prefs.edit().putString("active_run", run));
+        health = true; healthAlive = true; nanos = 100000000000L;
+        String prefix = "run=" + run + " uid=2000 pid=123 state=";
+        healthStatus = prefix + "ERROR message=Capture permission denied";
+        try { new EngineBackend(new Context()).check(); throw new AssertionError("Fatal engine error hidden"); }
+        catch (IllegalStateException expected) { }
+        require(!prefs.getString("manual_recovery_error", "").isEmpty(), "Fatal engine failure lost retry gate");
+        healthAlive = false;
+        try { new EngineBackend(new Context()).start(() -> true); throw new AssertionError("Dead fatal engine was recreated automatically"); }
+        catch (IllegalStateException expected) { require(expected.getMessage().contains("requires OFF"), "Wrong fatal health gate"); }
+        healthAlive = true;
+        healthStatus = prefix + "IDLE v=2 frames_read=0 sent=0 dropped=0 observed_ns=99000000000 last_read_ns=0 last_send_ns=0 message=none";
+        new EngineBackend(new Context(), () -> nanos).start(() -> true);
+        require(prefs.getString("manual_recovery_error", "").isEmpty() && run.equals(prefs.getString("active_run", "")),
+                "Healthy owned engine could not be validated and adopted without relaunch");
+        health = false;
     }
 
     private static void missingNetworkDoesNotLaunch() throws Exception {
@@ -221,6 +308,15 @@ public final class BackendCleanupHarness {
         backend.check(); // A fresh idle heartbeat is healthy even without audio.
         String lastHealthy = healthStatus;
         healthStatus = prefix + metrics + "50000000000 last_read_ns=0 last_send_ns=0 message=none";
+        MemoryPrefs adopted = new MemoryPrefs();
+        AppConfig.save(adopted.edit().putString("receiver", "192.0.2.1").putString("active_run", run));
+        Context.prefs = adopted;
+        try {
+            new EngineBackend(new Context(), () -> nanos).start(() -> true);
+            throw new AssertionError("Owner restart adopted a stalled engine as ready ON");
+        } catch (IllegalStateException expected) {
+            require(expected.getMessage().contains("heartbeat"), "Wrong adoption failure: " + expected);
+        } finally { Context.prefs = prefs; }
         try {
             backend.check();
             throw new AssertionError("Stale engine heartbeat was accepted as healthy");

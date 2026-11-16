@@ -92,9 +92,19 @@ public final class ConnectivityManager {
 package android.os;
 import java.util.*;
 public final class Handler {
- private final Queue<Runnable> queue=new ArrayDeque<>();
- public boolean post(Runnable runnable){queue.add(runnable);return true;}
- public void runAll(){while(!queue.isEmpty())queue.remove().run();}
+ private final List<Entry> queue=new ArrayList<>(); private long now,sequence;
+ public boolean post(Runnable runnable){return postDelayed(runnable,0);}
+ public boolean postDelayed(Runnable runnable,long delayMillis){queue.add(new Entry(runnable,now+Math.max(0,delayMillis),sequence++));return true;}
+ public void removeCallbacks(Runnable runnable){for(Iterator<Entry> i=queue.iterator();i.hasNext();)if(i.next().runnable==runnable)i.remove();}
+ public int pendingCount(){return queue.size();}
+ public void runCurrent(){runUntil(now);}
+ public void advanceBy(long millis){runUntil(now+millis);}
+ public void runAll(){while(!queue.isEmpty())runUntil(next().when);}
+ private void runUntil(long target){for(;;){Entry entry=next();if(entry==null||entry.when>target){now=target;return;}
+  queue.remove(entry);now=entry.when;entry.runnable.run();}}
+ private Entry next(){Entry best=null;for(Entry entry:queue)if(best==null||entry.when<best.when||(entry.when==best.when&&entry.sequence<best.sequence))best=entry;return best;}
+ private static final class Entry {final Runnable runnable;final long when,sequence;
+  Entry(Runnable runnable,long when,long sequence){this.runnable=runnable;this.when=when;this.sequence=sequence;}}
 }
 """,
     "android/os/Build.java": """
@@ -136,7 +146,7 @@ def main():
               "scope": "Production monitor behavior with controlled Android connectivity adapters; no device proof"}
     (OUT / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     assert result.returncode == 0, report
-    print("PASS: startup snapshot, LAN route, default changes, stale callbacks, close, unreachable routes")
+    print("PASS: startup snapshot, LAN route, coalesced route bursts, stale callbacks, close, unreachable routes")
 
 
 if __name__ == "__main__":

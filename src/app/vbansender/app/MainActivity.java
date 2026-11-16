@@ -72,7 +72,8 @@ public final class MainActivity extends Activity {
                     boolean enabled = !renderedEnabled && !renderedRetryOff;
                     VbanService.setEnabled(MainActivity.this, enabled);
                 } catch (Exception error) {
-                    AppConfig.save(prefs.edit().putString("last_error", error.toString()));
+                    AppConfig.save(prefs.edit().putString("last_error", error.toString())
+                            .putString("last_error_summary", AppConfig.errorSummary(error)));
                 }
                 render();
             }
@@ -114,27 +115,47 @@ public final class MainActivity extends Activity {
         boolean retryOff = retryOff();
         renderedEnabled = enabled;
         renderedRetryOff = retryOff;
-        toggle.setText(retryOff ? "RETRY OFF" : enabled ? "ON" : "OFF");
-        toggle.setBackground(buttonBackground(enabled ? Color.rgb(35, 110, 71)
-                : Color.rgb(51, 64, 78)));
-        toggle.setEnabled(enabled || retryOff || AppConfig.configured(this));
         String error = prefs.getString("last_error", "");
         String state = prefs.getString("controller_state", "OFF");
+        String label;
+        String message;
+        int color = Color.rgb(51, 64, 78);
+        boolean stopping = "STOPPING".equals(state) || !enabled && AppConfig.needsReconcile(this);
         if (!error.isEmpty()) {
-            status.setText("Error: " + error + (retryOff ? "\nRetry OFF to finish cleanup."
-                    : enabled ? "\nTurn OFF, then ON to retry." : "\nTurn ON to retry."));
-        } else if (enabled && "WAITING_NETWORK".equals(state)) {
-            status.setText("Waiting for network — automatic retry in "
-                    + AppConfig.networkRetrySeconds(prefs, SystemClock.uptimeMillis()) + " s");
+            label = retryOff ? "RETRY OFF" : "ERROR";
+            color = Color.rgb(153, 44, 44);
+            message = retryOff ? "Turning VBAN off did not finish.\nPress OK to retry. Details in Settings."
+                    : prefs.getString("last_error_summary", "Audio routing needs attention.")
+                        + (enabled ? "\nPress OK to turn VBAN off, then try again."
+                                : "\nPress OK to try again. Details in Settings.");
+        } else if (stopping) {
+            label = "STOPPING…";
+            color = Color.rgb(153, 101, 20);
+            message = "Restoring standard audio. Please wait.";
+        } else if (!enabled) {
+            label = "OFF";
+            message = AppConfig.configured(this) ? "Audio via standard output.\nPress OK to turn VBAN on."
+                    : "Open Settings to configure the receiver and local ADB.";
+        } else if ("WAITING_NETWORK".equals(state)) {
+            label = "WAITING";
+            color = Color.rgb(153, 101, 20);
+            long seconds = AppConfig.networkRetrySeconds(prefs, SystemClock.uptimeMillis());
+            message = (seconds == 0 ? "Retrying connection…" : "Network unavailable. Retrying in " + seconds + " s.")
+                    + "\nPress OK to turn VBAN off.";
             if (resumed) main.postDelayed(countdown, 1000);
-        } else if ("STARTING".equals(state) || "STOPPING".equals(state)) {
-            status.setText("STARTING".equals(state) ? "Starting…" : "Stopping…");
-        } else if (!AppConfig.configured(this)) {
-            status.setText("Open Settings to configure the receiver and local ADB.");
+        } else if ("ON".equals(state)) {
+            label = "ON";
+            color = Color.rgb(35, 110, 71);
+            message = "Automatic audio routing ready.\nPress OK to turn VBAN off.";
         } else {
-            status.setText(enabled ? "Automatic audio routing enabled"
-                    : "Audio via standard output");
+            label = "STARTING…";
+            color = Color.rgb(153, 101, 20);
+            message = "Preparing audio routing.\nPress OK to cancel.";
         }
+        toggle.setText(label);
+        toggle.setBackground(buttonBackground(color));
+        toggle.setEnabled(!error.isEmpty() || retryOff || !stopping && (enabled || AppConfig.configured(this)));
+        status.setText(message);
     }
 
     private boolean retryOff() {
@@ -170,7 +191,8 @@ public final class MainActivity extends Activity {
             try {
                 startForegroundService(new Intent(this, VbanService.class));
             } catch (Exception error) {
-                AppConfig.save(prefs.edit().putString("last_error", error.toString()));
+                AppConfig.save(prefs.edit().putString("last_error", error.toString())
+                            .putString("last_error_summary", AppConfig.errorSummary(error)));
             }
         }
         render();
