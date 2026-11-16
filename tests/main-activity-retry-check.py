@@ -54,12 +54,15 @@ public class Activity extends android.content.Context {
         "android/view/View.java": """
 package android.view;
 public class View {
- public static final int FOCUSABLE=1;
+ public static final int FOCUSABLE=1, VISIBLE=0, GONE=8;
+ private int visibility; private static View focused;
+ public void setVisibility(int v){visibility=v;} public int getVisibility(){return visibility;}
+ public boolean hasFocus(){return focused==this;}
  private OnClickListener listener; private boolean enabled=true; public Object background;
  public interface OnClickListener { void onClick(View v); }
  public void setOnClickListener(OnClickListener l){listener=l;}
  public boolean performClick(){if(listener!=null&&enabled){listener.onClick(this);return true;}return false;}
- public void requestFocus(){} public void setBackground(Object b){background=b;} public void setEnabled(boolean e){enabled=e;}
+ public boolean requestFocus(){if(!enabled)return false;focused=this;return true;} public void setBackground(Object b){background=b;} public void setEnabled(boolean e){enabled=e;if(!e&&focused==this)focused=null;}
  public boolean isEnabled(){return enabled;}
 }
 """,
@@ -74,6 +77,8 @@ public class TextView extends android.view.View {
  public void setGravity(int g){}
 }
 """,
+        "android/content/res/ColorStateList.java": "package android.content.res; public class ColorStateList { public static ColorStateList valueOf(int c){return new ColorStateList();} }",
+        "android/widget/ProgressBar.java": "package android.widget; public class ProgressBar extends android.view.View { public ProgressBar(android.content.Context c){} public void setIndeterminate(boolean b){} public void setIndeterminateTintList(android.content.res.ColorStateList c){} }",
         "android/widget/Button.java": """
 package android.widget;
 public class Button extends TextView {
@@ -84,8 +89,8 @@ public class Button extends TextView {
         "android/widget/LinearLayout.java": """
 package android.widget;
 public class LinearLayout extends android.view.View {
- public static final int VERTICAL=1;
- public static class LayoutParams { public int topMargin,bottomMargin; public LayoutParams(int w,int h){} }
+ public static final int VERTICAL=1,HORIZONTAL=0;
+ public static class LayoutParams { public int topMargin,bottomMargin,rightMargin; public LayoutParams(int w,int h){} }
  public LinearLayout(android.content.Context c){}
  public void setOrientation(int o){} public void setGravity(int g){} public void setPadding(int l,int t,int r,int b){}
  public void setBackgroundColor(int c){} public void addView(android.view.View v){} public void addView(android.view.View v,LayoutParams p){}
