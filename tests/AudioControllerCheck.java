@@ -13,6 +13,12 @@ public final class AudioControllerCheck {
     private static final long WAIT_SECONDS = 5;
 
     public static void main(String[] args) throws Exception {
+        missingNetworkWaitsAfterConfirmedCleanup();
+        networkRetryBackoffRecoveryAndOff();
+        onlyStableHealthResetsNetworkBackoff();
+        failedNetworkCleanupDoesNotRetry();
+        adbRouteErrorRemainsFatal();
+        networkWakeupDuringWaitPublicationIsRetained();
         runningBackendIsCheckedAndFailuresBecomeVisible();
         offDiscardsAnInFlightHealthError();
         firstOffStopsAnUnknownPreexistingBackend();
@@ -23,6 +29,213 @@ public final class AudioControllerCheck {
         failedStopBlocksRestartUntilCleanupSucceeds();
         closeDoesNotPretendTheEngineStopped();
         System.out.println("AUDIO_CONTROLLER_PASS");
+    }
+
+    private static void adbRouteErrorRemainsFatal() throws Exception {
+        AtomicInteger starts = new AtomicInteger();
+        StateListener states = new StateListener();
+        AudioController controller = new AudioController(new AudioController.Backend() {
+            public void start(java.util.function.BooleanSupplier enabled) throws Exception {
+                starts.incrementAndGet();
+                throw new java.net.NoRouteToHostException("Local ADB connection failed");
+            }
+            public void stop() { }
+            public void check() { }
+        }, states);
+        try {
+            controller.request(true);
+            await(states.firstError, "ADB route error was hidden");
+            controller.retryNetwork();
+            Thread.sleep(50);
+            require(starts.get() == 1 && !states.hasState(AudioController.State.WAITING_NETWORK),
+                    "An ADB I/O error enabled automatic receiver-network retry");
+        } finally { controller.close(); }
+    }
+
+    private static void networkWakeupDuringWaitPublicationIsRetained() throws Exception {
+        AtomicInteger starts = new AtomicInteger();
+        AtomicReference<AudioController> owner = new AtomicReference<>();
+        StateListener states = new StateListener();
+        AudioController controller = new AudioController(new AudioController.Backend() {
+            public void start(java.util.function.BooleanSupplier enabled) throws Exception {
+                if (starts.incrementAndGet() == 1) throw new AudioController.NetworkUnavailableException("No route");
+            }
+            public void stop() { }
+            public void check() { }
+        }, new AudioController.Listener() {
+            public void onState(AudioController.State state) { states.onState(state); }
+            public void onError(Exception error) { states.onError(error); }
+            public void onNetworkWait(long millis) { owner.get().retryNetwork(); }
+        });
+        owner.set(controller);
+        try {
+            controller.request(true);
+            states.awaitState(AudioController.State.ON);
+            require(starts.get() == 2 && states.errors.isEmpty(), "Network wakeup was lost while publishing wait");
+        } finally { controller.close(); }
+    }
+
+    private static void networkRetryBackoffRecoveryAndOff() throws Exception {
+        java.util.concurrent.atomic.AtomicLong clock = new java.util.concurrent.atomic.AtomicLong(1);
+        AtomicInteger starts = new AtomicInteger(), stops = new AtomicInteger();
+        java.util.concurrent.atomic.AtomicBoolean available = new java.util.concurrent.atomic.AtomicBoolean();
+        List<Long> delays = Collections.synchronizedList(new ArrayList<Long>());
+        CountDownLatch healthy = new CountDownLatch(1);
+        StateListener states = new StateListener();
+        AudioController controller = new AudioController(new AudioController.Backend() {
+            public void start(java.util.function.BooleanSupplier enabled) throws Exception {
+                starts.incrementAndGet();
+                if (!available.get()) throw new AudioController.NetworkUnavailableException("Network unreachable");
+            }
+            public void stop() { stops.incrementAndGet(); }
+            public void check() throws Exception {
+                if (!available.get()) throw new AudioController.NetworkUnavailableException("Network lost");
+                healthy.countDown();
+            }
+        }, new AudioController.Listener() {
+            public void onState(AudioController.State state) { states.onState(state); }
+            public void onError(Exception error) { states.onError(error); }
+            public void onNetworkWait(long millis) { delays.add(millis); }
+        }, null, clock::get);
+        try {
+            controller.request(true);
+            long[] expected = {10000, 20000, 40000, 80000, 160000, 300000, 300000};
+            for (int i = 0; i < expected.length; i++) {
+                final int count = i + 1;
+                awaitCondition(() -> delays.size() >= count, "network wait " + count);
+                require(delays.get(i) == expected[i], "incorrect backoff " + delays);
+                if (i + 1 < expected.length) controller.retryNetwork();
+            }
+            require(starts.get() == expected.length && stops.get() == starts.get(),
+                    "each network attempt must finish cleanup before waiting");
+            available.set(true);
+            controller.retryNetwork(); // Same wakeup used by ConnectivityManager, without waiting 5 min.
+            states.awaitState(AudioController.State.ON);
+            clock.addAndGet(30000000000L);
+            controller.check();
+            await(healthy, "health check did not finish");
+            available.set(false);
+            controller.check();
+            awaitCondition(() -> delays.size() == expected.length + 1, "loss while sending");
+            require(delays.get(expected.length) == 10000, "healthy operation did not reset backoff");
+            controller.request(false);
+            states.awaitState(AudioController.State.OFF);
+            int stoppedStarts = starts.get();
+            controller.retryNetwork();
+            Thread.sleep(50);
+            require(starts.get() == stoppedStarts && states.errors.isEmpty(), "OFF allowed a retry or hid an error");
+        } finally { controller.close(); }
+    }
+
+    private static void onlyStableHealthResetsNetworkBackoff() throws Exception {
+        java.util.concurrent.atomic.AtomicLong clock = new java.util.concurrent.atomic.AtomicLong(1);
+        java.util.concurrent.atomic.AtomicBoolean available = new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.concurrent.atomic.AtomicBoolean statusReadFails = new java.util.concurrent.atomic.AtomicBoolean();
+        AtomicInteger successfulChecks = new AtomicInteger();
+        List<Long> delays = Collections.synchronizedList(new ArrayList<Long>());
+        StateListener states = new StateListener();
+        AudioController controller = new AudioController(new AudioController.Backend() {
+            public void start(java.util.function.BooleanSupplier enabled) throws Exception {
+                if (!available.get()) throw new AudioController.NetworkUnavailableException("No route");
+            }
+            public void stop() { }
+            public void check() throws Exception {
+                if (!available.get()) throw new AudioController.NetworkUnavailableException("Route lost");
+                if (statusReadFails.get()) throw new java.io.IOException("Status read failed");
+                successfulChecks.incrementAndGet();
+            }
+        }, new AudioController.Listener() {
+            public void onState(AudioController.State state) { states.onState(state); }
+            public void onError(Exception error) { states.onError(error); }
+            public void onNetworkWait(long millis) { delays.add(millis); }
+        }, null, clock::get);
+        try {
+            controller.request(true);
+            awaitCondition(() -> delays.size() == 1, "initial network wait");
+            long[] healthyWindows = {0, 29999999999L, 30000000000L};
+            long[] expected = {20000, 40000, 10000};
+            for (int i = 0; i < healthyWindows.length; i++) {
+                available.set(true);
+                controller.retryNetwork();
+                states.awaitStateCount(AudioController.State.ON, i + 1);
+                clock.addAndGet(healthyWindows[i]);
+                controller.check();
+                final int checks = i + 1;
+                awaitCondition(() -> successfulChecks.get() == checks, "healthy check " + checks);
+                available.set(false);
+                controller.check();
+                awaitCondition(() -> delays.size() == checks + 1, "network loss " + checks);
+                require(delays.get(checks) == expected[i], "Wrong stability reset: " + delays);
+            }
+            // A failed status read interrupts the healthy window even if the process stays ON.
+            available.set(true);
+            controller.retryNetwork();
+            states.awaitStateCount(AudioController.State.ON, 4);
+            clock.addAndGet(20000000000L);
+            statusReadFails.set(true);
+            controller.check();
+            await(states.firstError, "temporary health failure hidden");
+            statusReadFails.set(false);
+            clock.addAndGet(20000000000L);
+            controller.check();
+            awaitCondition(() -> successfulChecks.get() == 4, "health read recovery");
+            available.set(false);
+            controller.check();
+            awaitCondition(() -> delays.size() == 5, "loss after interrupted health window");
+            require(delays.get(4) == 20000, "Interrupted health window reset backoff too early: " + delays);
+        } finally { controller.close(); }
+    }
+
+    private static void failedNetworkCleanupDoesNotRetry() throws Exception {
+        AtomicInteger starts = new AtomicInteger();
+        StateListener listener = new StateListener();
+        AudioController controller = new AudioController(new AudioController.Backend() {
+            public void start(java.util.function.BooleanSupplier enabled) throws Exception {
+                starts.incrementAndGet();
+                throw new AudioController.NetworkUnavailableException("Network unreachable");
+            }
+            public void stop() throws Exception { throw new Exception("Cleanup failed"); }
+            public void check() { }
+        }, listener);
+        try {
+            controller.request(true);
+            await(listener.firstError, "cleanup failure hidden");
+            controller.retryNetwork();
+            Thread.sleep(50);
+            require(starts.get() == 1 && !listener.hasState(AudioController.State.WAITING_NETWORK),
+                    "failed cleanup must block automatic retries");
+        } finally { controller.close(); }
+    }
+
+    private static void awaitCondition(java.util.function.BooleanSupplier condition, String message)
+            throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) Thread.sleep(5);
+        require(condition.getAsBoolean(), message);
+    }
+
+    private static void missingNetworkWaitsAfterConfirmedCleanup() throws Exception {
+        AtomicInteger stops = new AtomicInteger();
+        CountDownLatch waiting = new CountDownLatch(1);
+        List<Exception> errors = Collections.synchronizedList(new ArrayList<Exception>());
+        AudioController controller = new AudioController(new AudioController.Backend() {
+            public void start(java.util.function.BooleanSupplier enabled) throws Exception {
+                throw new AudioController.NetworkUnavailableException("Network unreachable");
+            }
+            public void stop() { stops.incrementAndGet(); }
+            public void check() { }
+        }, new AudioController.Listener() {
+            public void onState(AudioController.State state) {
+                if ("WAITING_NETWORK".equals(state.name())) waiting.countDown();
+            }
+            public void onError(Exception error) { errors.add(error); }
+        });
+        try {
+            controller.request(true);
+            await(waiting, "missing network did not enter a recoverable waiting state");
+            require(stops.get() == 1 && errors.isEmpty(),
+                    "network wait must follow confirmed cleanup without a fatal error");
+        } finally { controller.close(); }
     }
 
     private static void runningBackendIsCheckedAndFailuresBecomeVisible() throws Exception {

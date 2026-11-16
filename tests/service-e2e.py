@@ -50,11 +50,17 @@ package android.os;
 import java.util.concurrent.*;
 public class Handler {
  public static final BlockingQueue<Runnable> queue=new LinkedBlockingQueue<>();
+ public static final java.util.Map<Runnable,Long> delayed=new ConcurrentHashMap<>();
  public Handler(Looper l) { }
  public boolean post(Runnable r) { queue.add(r); return true; }
- public boolean postDelayed(Runnable r,long ms) { return true; }
- public void removeCallbacks(Runnable r) { queue.remove(r); }
- public void removeCallbacksAndMessages(Object token) { queue.clear(); }
+ public boolean postDelayed(Runnable r,long ms) { delayed.put(r,ms); return true; }
+ public void removeCallbacks(Runnable r) { queue.remove(r); delayed.remove(r); }
+ public void removeCallbacksAndMessages(Object token) { queue.clear(); delayed.clear(); }
+ public static void fireDelay(long ms) {
+  for(java.util.Map.Entry<Runnable,Long> e:delayed.entrySet())
+   if(e.getValue()==ms && delayed.remove(e.getKey())!=null){queue.add(e.getKey());return;}
+  throw new AssertionError("No timer for "+ms+": "+delayed.values());
+ }
 }
 """,
     "android/util/Log.java": "package android.util; public class Log { public static int i(String t,String s){return 0;} public static int e(String t,String s,Throwable e){return 0;} }",
@@ -89,12 +95,22 @@ public class Service extends android.content.Context {
 }
 """,
     "app/vbansender/app/MainActivity.java": "package app.vbansender.app; public class MainActivity { }",
+    "app/vbansender/app/NetworkMonitor.java": """
+package app.vbansender.app;
+public final class NetworkMonitor implements AutoCloseable {
+ public static Runnable changed; public static boolean closed;
+ public NetworkMonitor(android.content.Context c, android.os.Handler h, Runnable r){changed=r;closed=false;}
+ public boolean hasRoute(java.net.InetAddress address){return true;}
+ public void close(){closed=true;}
+}
+""",
     "app/vbansender/app/EngineBackend.java": """
 package app.vbansender.app;
 public class EngineBackend implements AudioController.Backend {
  public static AudioController.Backend delegate;
  public static Runnable beforeCleanup;
  public EngineBackend(android.content.Context c) { }
+ public EngineBackend(android.content.Context c,java.util.function.Predicate<java.net.InetAddress> network) { }
  public void start(java.util.function.BooleanSupplier e)throws Exception{delegate.start(e);}
  private final android.content.SharedPreferences prefs=AppConfig.prefs(new android.content.Context());
  private String failed="";
@@ -121,7 +137,7 @@ def main():
                    + [str(ROOT / "src/app/vbansender" / p) for p in actual]
                    + [str(ROOT / "tests" / p) for p in ("ServiceHarness.java", "MemoryPrefs.java")], check=True)
     results = {}
-    for scenario in ("delayed_commands", "failed_stop", "stale_off", "shutdown_rejected",
+    for scenario in ("network_cleanup_event", "network_retry", "delayed_commands", "failed_stop", "stale_off", "shutdown_rejected",
                      "off_on_during_check", "replacement_during_start", "replacement_with_pending_off",
                      "replacement_cleanup_fails", "new_off_before_failed_stop"):
         result = subprocess.run(["java", "-cp", str(classes), "app.vbansender.app.ServiceHarness", scenario],

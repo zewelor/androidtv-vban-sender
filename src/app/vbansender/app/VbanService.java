@@ -17,9 +17,13 @@ import java.util.concurrent.CancellationException;
 /** Owns serialized user requests; checks run on the same worker as Start and Stop. */
 public final class VbanService extends Service {
     private AudioController controller;
+    private NetworkMonitor network;
     private final Handler main = new Handler(Looper.getMainLooper());
     private int latestStart;
     private volatile boolean destroyed;
+    private final Runnable networkRetry = new Runnable() {
+        @Override public void run() { controller.retryNetwork(); }
+    };
     private final Runnable healthCheck = new Runnable() {
         @Override
         public void run() {
@@ -41,14 +45,28 @@ public final class VbanService extends Service {
         manager.createNotificationChannel(new NotificationChannel("vban", "VBAN audio routing",
                 NotificationManager.IMPORTANCE_LOW));
         startForeground(2, notification("Preparing audio routing"));
-        controller = new AudioController(new EngineBackend(this), new AudioController.Listener() {
+        network = new NetworkMonitor(this, main, new Runnable() {
+            @Override public void run() {
+                if (destroyed) return;
+                controller.retryNetwork();
+                controller.check();
+            }
+        });
+        controller = new AudioController(new EngineBackend(this,
+                new java.util.function.Predicate<java.net.InetAddress>() {
+                    @Override public boolean test(java.net.InetAddress address) {
+                        return network.hasRoute(address);
+                    }
+                }),
+                new AudioController.Listener() {
             @Override
             public void onState(final AudioController.State state) {
                 if (destroyed) return;
                 Log.i("VBAN", "Controller " + state);
                 SharedPreferences prefs = AppConfig.prefs(VbanService.this);
                 SharedPreferences.Editor update = prefs.edit().putString("controller_state", state.name());
-                if (state == AudioController.State.ON || state == AudioController.State.OFF
+                if (state == AudioController.State.ON || state == AudioController.State.WAITING_NETWORK
+                        || state == AudioController.State.OFF
                         && !prefs.getBoolean("enabled", false)) {
                     update.remove("last_error");
                 }
@@ -56,6 +74,23 @@ public final class VbanService extends Service {
                 main.post(new Runnable() {
                     @Override
                     public void run() {
+                        if (state != AudioController.State.WAITING_NETWORK) main.removeCallbacks(networkRetry);
+                        publishCurrentState();
+                    }
+                });
+            }
+
+            @Override public void onNetworkWait(final long retryMillis) {
+                if (destroyed) return;
+                AppConfig.save(AppConfig.prefs(VbanService.this).edit()
+                        .putString("network_retry_seconds", Long.toString(retryMillis / 1000)));
+                main.post(new Runnable() {
+                    @Override public void run() {
+                        if (destroyed) return;
+                        main.removeCallbacks(networkRetry);
+                        if (AppConfig.prefs(VbanService.this).getBoolean("enabled", false)) {
+                            main.postDelayed(networkRetry, retryMillis);
+                        }
                         publishCurrentState();
                     }
                 });
@@ -96,6 +131,8 @@ public final class VbanService extends Service {
         boolean failed = !prefs.getString("last_error", "").isEmpty();
         getSystemService(NotificationManager.class).notify(2,
                 notification(failed ? "Error — open VBAN for details"
+                        : "WAITING_NETWORK".equals(state) ? "Waiting for network — retry in "
+                                + prefs.getString("network_retry_seconds", "10") + " s"
                         : "ON".equals(state) ? "Automatic audio routing enabled" : state));
         if (off && stopSelfResult(latestStart)) {
             stopForeground(STOP_FOREGROUND_REMOVE);
@@ -122,6 +159,7 @@ public final class VbanService extends Service {
     @Override
     public void onDestroy() {
         destroyed = true;
+        network.close();
         main.removeCallbacksAndMessages(null);
         controller.close();
         super.onDestroy();

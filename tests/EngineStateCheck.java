@@ -7,6 +7,9 @@ public final class EngineStateCheck {
     public static void main(String[] args) {
         String legacy = "run=" + RUN + " uid=2000 pid=1234 state=IDLE message=none\n";
         EngineState old = EngineState.parse(legacy);
+        EngineState network = EngineState.parse(v2("NETWORK_UNAVAILABLE", 0, 0, 0, 1000, 0, 0, "No route"));
+        require("NETWORK_UNAVAILABLE".equals(network.state) && "No route".equals(network.message),
+                "Typed network failure was lost in status IPC");
         require(old != null && !old.metricsAvailable && old.pid == 1234
                 && "IDLE".equals(old.state) && "none".equals(old.message),
                 "Legacy state was not accepted as metrics unavailable");

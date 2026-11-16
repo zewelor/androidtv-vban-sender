@@ -34,6 +34,8 @@ public final class ServiceHarness {
         ServiceHarness h = new ServiceHarness();
         try {
             switch (args[0]) {
+                case "network_retry": h.networkRetry(); break;
+                case "network_cleanup_event": h.networkCleanupEvent(); break;
                 case "new_off_before_failed_stop": h.newOffBeforeFailedStop(); break;
                 case "delayed_commands": h.delayedCommands(); break;
                 case "failed_stop": h.failedStop(); break;
@@ -46,7 +48,54 @@ public final class ServiceHarness {
                 default: throw new AssertionError("Unknown scenario");
             }
             System.out.println(args[0] + " PASS");
-        } finally { h.backend.releaseStart.countDown(); h.backend.releaseCheck.countDown(); h.service.onDestroy(); }
+        } finally { h.backend.releaseStart.countDown(); h.backend.releaseCheck.countDown();
+            h.backend.releaseStop.countDown(); h.service.onDestroy(); }
+    }
+
+    private void networkCleanupEvent() throws Exception {
+        backend.networkAvailable = false;
+        backend.blockStop = true;
+        reconcileSaved(true);
+        require(backend.stopping.await(3, TimeUnit.SECONDS), "network cleanup did not begin");
+        require(prefs.getBoolean("cleanup_pending", false), "cleanup token not persisted");
+        NetworkMonitor.changed.run(); // Both retryNetwork() and check(), with the internal token visible.
+        backend.releaseStop.countDown();
+        await(() -> "WAITING_NETWORK".equals(prefs.getString("controller_state", ""))
+                && !prefs.getString("network_retry_seconds", "").isEmpty(), "network wait after cleanup");
+        require(backend.starts.get() == 1 && "10".equals(prefs.getString("network_retry_seconds", "")),
+                "callback during internal cleanup bypassed network backoff");
+    }
+
+    private void networkRetry() throws Exception {
+        backend.networkAvailable = false;
+        reconcileSaved(true);
+        await(() -> "WAITING_NETWORK".equals(prefs.getString("controller_state", ""))
+                && "10".equals(prefs.getString("network_retry_seconds", "")), "first network wait");
+        await(() -> { drain(); return Handler.delayed.containsValue(10000L); }, "initial retry timer publication");
+        require(android.app.NotificationManager.text.contains("Waiting for network")
+                && prefs.getString("last_error", "").isEmpty() && prefs.getBoolean("enabled", false),
+                "missing network must keep requested ON and show a recoverable wait");
+        Handler.fireDelay(10000); drain();
+        await(() -> "20".equals(prefs.getString("network_retry_seconds", "")), "timer retry");
+        await(() -> { drain(); return Handler.delayed.containsValue(20000L); }, "second retry timer publication");
+        backend.networkAvailable = true;
+        NetworkMonitor.changed.run();
+        await(() -> "ON".equals(prefs.getString("controller_state", "")), "network event recovery");
+        await(() -> { drain(); return !Handler.delayed.containsValue(20000L); }, "retry cancellation after recovery");
+        require(!Handler.delayed.containsValue(20000L), "successful recovery retained a stale retry timer");
+        backend.networkAvailable = false;
+        controller().check();
+        await(() -> "WAITING_NETWORK".equals(prefs.getString("controller_state", "")), "running network loss");
+        drain();
+        choose(false); deliver();
+        await(() -> "OFF".equals(prefs.getString("controller_state", ""))
+                && prefs.getString("pending_off_token", "").isEmpty() && !backend.active.get(),
+                "OFF during network wait");
+        await(() -> { drain(); return service.stopped; }, "service shutdown after OFF");
+        int starts = backend.starts.get();
+        NetworkMonitor.changed.run(); drain();
+        require(Handler.delayed.isEmpty() && NetworkMonitor.closed && service.stopped
+                && backend.starts.get() == starts, "OFF or destroyed service allowed another network retry");
     }
 
     private void choose(boolean enabled) {
@@ -252,12 +301,15 @@ public final class ServiceHarness {
         final AtomicBoolean active = new AtomicBoolean(), failStop = new AtomicBoolean();
         final AtomicBoolean cleanupPending = new AtomicBoolean();
         final CountDownLatch releaseStart = new CountDownLatch(1), releaseCheck = new CountDownLatch(1), checking = new CountDownLatch(1);
-        volatile boolean blockStart, blockCheck;
+        volatile boolean blockStart, blockCheck, blockStop;
+        final CountDownLatch stopping = new CountDownLatch(1), releaseStop = new CountDownLatch(1);
+        volatile boolean networkAvailable = true;
         final List<String> events = Collections.synchronizedList(new ArrayList<>());
         final CountDownLatch secondStart = new CountDownLatch(1);
         public void start(BooleanSupplier enabled) throws Exception {
             if (cleanupPending.get()) throw new IllegalStateException("Previous cleanup is incomplete");
             int start = starts.incrementAndGet();
+            if (!networkAvailable) throw new AudioController.NetworkUnavailableException("Network unreachable");
             events.add("start-" + start);
             active.set(true);
             if (start == 2) secondStart.countDown();
@@ -267,11 +319,14 @@ public final class ServiceHarness {
             cleanupPending.set(true);
             events.add("stop");
             stops.incrementAndGet();
+            stopping.countDown();
+            if (blockStop) require(releaseStop.await(3, TimeUnit.SECONDS), "stop release");
             if (failStop.getAndSet(false)) throw new Exception("Stop was not confirmed");
             active.set(false);
             cleanupPending.set(false);
         }
         public void check() throws Exception {
+            if (!networkAvailable) throw new AudioController.NetworkUnavailableException("Network lost");
             checking.countDown();
             if (blockCheck) require(releaseCheck.await(3, TimeUnit.SECONDS), "check release");
         }

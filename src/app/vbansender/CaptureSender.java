@@ -154,7 +154,11 @@ public final class CaptureSender {
         Runtime.getRuntime().addShutdownHook(cleanup);
         byte[] pcm = new byte[CapturePackets.BLOCK_FRAMES * VbanPacket.FRAME_BYTES];
         try (DatagramChannel channel = DatagramChannel.open()) {
-            channel.connect(config.destination);
+            try {
+                channel.connect(config.destination);
+            } catch (IOException error) {
+                throw networkFailure(error);
+            }
             channel.configureBlocking(false);
             PacketOutput output = new PacketOutput(channel, config.stream, diagnostics,
                     progress, listener, writer);
@@ -262,6 +266,8 @@ public final class CaptureSender {
             } catch (PortUnreachableException unavailable) {
                 // A temporary receiver outage loses this packet, not the capture session.
                 written = 0;
+            } catch (IOException error) {
+                throw networkFailure(error);
             }
             if (written != size && written != 0) {
                 throw new IllegalStateException("Partial UDP datagram");
@@ -301,5 +307,39 @@ public final class CaptureSender {
                     + ",\"startup_callback_ns\":" + startupCallbackNanos
                     + ",\"capture_buffer_frames\":" + captureBufferFrames + "}");
         }
+    }
+
+    /** Classify only route loss from the UDP connect/write operation. */
+    private static IOException networkFailure(IOException error) {
+        if (error instanceof java.net.NoRouteToHostException) return error;
+        for (Throwable cause = error.getCause(); cause != null; cause = cause.getCause()) {
+            if (cause instanceof android.system.ErrnoException) {
+                int errno = ((android.system.ErrnoException) cause).errno;
+                if (errno == android.system.OsConstants.ENETUNREACH
+                        || errno == android.system.OsConstants.EHOSTUNREACH
+                        || errno == android.system.OsConstants.ENETDOWN) {
+                    java.net.NoRouteToHostException unavailable =
+                            new java.net.NoRouteToHostException(error.getMessage());
+                    unavailable.initCause(error);
+                    return unavailable;
+                }
+            }
+        }
+        // Android 12 NIO's native IOUtil/Net discard errno and throw a plain
+        // IOException/SocketException with libc strerror. Match that exact system
+        // message only, never a substring or an arbitrary wrapped exception.
+        Class<?> type = error.getClass();
+        if (error.getCause() == null && (type == IOException.class
+                || type == java.net.SocketException.class || type == java.net.ConnectException.class)) {
+            String message = error.getMessage();
+            if (android.system.Os.strerror(android.system.OsConstants.ENETUNREACH).equals(message)
+                    || android.system.Os.strerror(android.system.OsConstants.EHOSTUNREACH).equals(message)
+                    || android.system.Os.strerror(android.system.OsConstants.ENETDOWN).equals(message)) {
+                java.net.NoRouteToHostException unavailable = new java.net.NoRouteToHostException(message);
+                unavailable.initCause(error);
+                return unavailable;
+            }
+        }
+        return error;
     }
 }

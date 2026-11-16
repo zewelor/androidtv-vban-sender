@@ -7,7 +7,7 @@ import java.util.regex.Pattern;
 /** Validates the bounded legacy or v2 state emitted by the owned shell engine. */
 final class EngineState {
     private static final String PREFIX = "run=([a-f0-9]{32}) uid=2000 pid=([1-9][0-9]*) "
-            + "state=(IDLE|STARTING_CAPTURE|SENDING|STOPPED|ERROR) ";
+            + "state=(IDLE|STARTING_CAPTURE|SENDING|STOPPED|ERROR|NETWORK_UNAVAILABLE) ";
     private static final Pattern LEGACY = Pattern.compile(PREFIX + "message=([^\\r\\n]*)\\n?");
     private static final Pattern V2 = Pattern.compile(PREFIX
             + "v=2 frames_read=(0|[1-9][0-9]*) sent=(0|[1-9][0-9]*) "

@@ -20,6 +20,9 @@ public final class MainActivityRetryHarness {
             if (scenario.equals("failed_off_unconfigured")) {
                 AppConfig.save(prefs.edit().putString("receiver", "").putBoolean("authorized", false));
             }
+        } else if (scenario.equals("network_wait")) {
+            AppConfig.save(prefs.edit().putBoolean("enabled", true)
+                    .putString("controller_state", "WAITING_NETWORK").putString("network_retry_seconds", "300"));
         } else if (scenario.equals("ordinary_off")) {
             AppConfig.save(prefs.edit().putBoolean("enabled", false));
         } else if (scenario.equals("failed_start")) {
@@ -56,6 +59,11 @@ public final class MainActivityRetryHarness {
             require(!prefs.getBoolean("enabled", true)
                     && !prefs.getString("pending_off_token", "").isEmpty(),
                     "OFF retry did not preserve the saved OFF choice and create a fresh obligation");
+        } else if (scenario.equals("network_wait")) {
+            require("ON".contentEquals(button.getText()) && status.getText().toString().contains("Waiting for network")
+                    && status.getText().toString().contains("300 s"), "Waiting state or retry interval missing");
+            button.performClick();
+            require(Boolean.FALSE.equals(VbanService.lastEnabled), "Waiting network did not allow OFF");
         } else if (scenario.equals("ordinary_off")) {
             require("OFF".contentEquals(button.getText()), "Ordinary OFF label changed");
             button.performClick();

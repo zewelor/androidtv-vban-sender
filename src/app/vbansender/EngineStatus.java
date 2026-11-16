@@ -13,7 +13,7 @@ final class EngineStatus {
     private static final int MAX_STATUS_BYTES = 1024;
     private static final long PUBLISH_INTERVAL_NANOS = 1000000000L;
     private static final String[] STATES = {
-            "IDLE", "STARTING_CAPTURE", "SENDING", "STOPPED", "ERROR"
+            "IDLE", "STARTING_CAPTURE", "SENDING", "STOPPED", "ERROR", "NETWORK_UNAVAILABLE"
     };
 
     private final String run;
@@ -57,7 +57,8 @@ final class EngineStatus {
         if (message == null || message.isEmpty()) {
             message = error.getClass().getSimpleName();
         }
-        publish("ERROR", message, true);
+        publish(error instanceof java.net.NoRouteToHostException
+                ? "NETWORK_UNAVAILABLE" : "ERROR", message, true);
     }
 
     private void publish(String state, String message, boolean force) throws IOException {

@@ -14,6 +14,7 @@ public final class BackendCleanupHarness {
     private static boolean newerOffOnRestore;
     private static boolean health;
     private static String healthStatus;
+    private static boolean healthAlive = true;
     private static boolean starting;
     private static boolean staleStop;
     private static boolean markerCreated;
@@ -59,6 +60,7 @@ public final class BackendCleanupHarness {
         }
         if (health && command.startsWith("if [ -f ")) return healthStatus;
         if (health && command.contains("/cmdline")) {
+            if (!healthAlive) return "";
             return "app.vbansender.AudioEngine\n0123456789abcdef0123456789abcdef";
         }
         if (slow) {
@@ -92,6 +94,7 @@ public final class BackendCleanupHarness {
     }
 
     public static void main(String[] args) throws Exception {
+        missingNetworkDoesNotLaunch();
         if (args.length == 1 && "startup".equals(args[0])) {
             startClearsStaleStopBeforeEnabling();
             return;
@@ -154,6 +157,19 @@ public final class BackendCleanupHarness {
         System.out.println("BACKEND_CLEANUP_PASS");
     }
 
+    private static void missingNetworkDoesNotLaunch() throws Exception {
+        MemoryPrefs prefs = new MemoryPrefs(); Context.prefs = prefs;
+        AppConfig.save(prefs.edit().putString("receiver", "192.0.2.1"));
+        int before = commands;
+        try {
+            new EngineBackend(new Context(), address -> false).start(() -> true);
+            throw new AssertionError("Missing network launched engine");
+        } catch (AudioController.NetworkUnavailableException expected) {
+            require(before == commands && !prefs.contains("active_run") && !prefs.contains("original_surround"),
+                    "Network must be checked before ADB, surround changes or launch");
+        }
+    }
+
     private static void startPreservesForeignStop() throws Exception {
         MemoryPrefs fresh = new MemoryPrefs();
         Context.prefs = fresh;
@@ -211,12 +227,35 @@ public final class BackendCleanupHarness {
         } catch (IllegalStateException expected) {
             require(expected.getMessage().contains("heartbeat"), "Wrong stale heartbeat error");
         }
+        try {
+            new EngineBackend(new Context(), address -> false).check();
+            throw new AssertionError("Missing route hid a stale heartbeat");
+        } catch (IllegalStateException expected) {
+            require(expected.getMessage().contains("heartbeat"), "Stalled engine became retryable");
+        }
         require(lastHealthy.equals(prefs.getString("engine_snapshot", "")),
                 "A stale heartbeat must not replace the last checked snapshot");
         healthStatus = prefix + metrics + "99000000000 last_read_ns=0 last_send_ns=0 message=none";
         backend.check(); // A later heartbeat makes the same backend healthy again.
         healthStatus = prefix + "message=none";
         backend.check(); // Legacy snapshots have no monotonic timestamp to check.
+        healthAlive = false;
+        try {
+            new EngineBackend(new Context(), address -> false).check();
+            throw new AssertionError("Missing route hid a dead engine");
+        } catch (IllegalStateException expected) {
+            require(expected.getMessage().contains("stopped"), "Dead engine became retryable");
+        } finally { healthAlive = true; }
+        healthStatus = prefix.replace("state=IDLE", "state=NETWORK_UNAVAILABLE") + "message=Network unreachable";
+        try { backend.check(); throw new AssertionError("Network error was not recoverable"); }
+        catch (AudioController.NetworkUnavailableException expected) { }
+        healthStatus = prefix.replace("state=IDLE", "state=ERROR") + "message=Capture permission denied";
+        try {
+            new EngineBackend(new Context(), address -> false).check();
+            throw new AssertionError("Capture failure hidden by a missing network");
+        } catch (IllegalStateException expected) {
+            require(expected.getMessage().contains("permission"), "Wrong fatal error");
+        }
         health = false;
     }
 

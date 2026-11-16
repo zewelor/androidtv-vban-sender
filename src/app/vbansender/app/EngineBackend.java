@@ -23,6 +23,15 @@ final class EngineBackend implements AudioController.Backend {
     private final java.util.function.LongSupplier nanoTime;
     private static final long STOP_BUDGET_NANOS = 30000000000L;
     private static final long HEARTBEAT_TIMEOUT_NANOS = 45000000000L;
+    private java.util.function.Predicate<java.net.InetAddress> networkAvailable =
+            new java.util.function.Predicate<java.net.InetAddress>() {
+                @Override public boolean test(java.net.InetAddress address) { return true; }
+            };
+
+    EngineBackend(Context context, java.util.function.Predicate<java.net.InetAddress> networkAvailable) {
+        this(context);
+        this.networkAvailable = networkAvailable;
+    }
 
     EngineBackend(Context context) {
         this(context, new java.util.function.LongSupplier() {
@@ -108,6 +117,7 @@ final class EngineBackend implements AudioController.Backend {
             throw new IllegalStateException("Previous cleanup is incomplete. Turn OFF, then ON to retry.");
         }
         OutputConfig config = AppConfig.read(context);
+        requireNetwork(config.destination.getAddress());
         if (!stillEnabled.getAsBoolean()) {
             throw new CancellationException("Start cancelled");
         }
@@ -137,6 +147,9 @@ final class EngineBackend implements AudioController.Backend {
         if (existing != null && alive(existing)) {
             if (!existing.run.equals(previous)) {
                 throw new IllegalStateException("Another engine is running; use developer Stop");
+            }
+            if ("NETWORK_UNAVAILABLE".equals(existing.state)) {
+                throw new AudioController.NetworkUnavailableException(existing.message);
             }
             if ("ERROR".equals(existing.state) || "STOPPED".equals(existing.state)) {
                 throw new IllegalStateException("Previous engine is still exiting");
@@ -193,6 +206,10 @@ final class EngineBackend implements AudioController.Backend {
                 + "then exit 0; fi; ready_attempt=$((ready_attempt + 1)); sleep 0.1; done; exit 1";
         shell(launch);
         EngineState started = read();
+        if (started != null && run.equals(started.run)
+                && "NETWORK_UNAVAILABLE".equals(started.state)) {
+            throw new AudioController.NetworkUnavailableException(started.message);
+        }
         if (started == null || !run.equals(started.run) || !alive(started)
                 || "ERROR".equals(started.state) || "STOPPED".equals(started.state)) {
             throw new IllegalStateException(started == null ? "Engine did not start" : started.message);
@@ -240,6 +257,9 @@ final class EngineBackend implements AudioController.Backend {
         if (state == null || !state.run.equals(run)) {
             throw new IllegalStateException("Engine stopped. Turn OFF, then ON to retry.");
         }
+        if ("NETWORK_UNAVAILABLE".equals(state.state)) {
+            throw new AudioController.NetworkUnavailableException(state.message);
+        }
         if ("ERROR".equals(state.state) || "STOPPED".equals(state.state)) {
             throw new IllegalStateException("Engine " + state.state + ": " + state.message);
         }
@@ -253,6 +273,13 @@ final class EngineBackend implements AudioController.Backend {
                 throw new IllegalStateException("Engine heartbeat is stale. Turn OFF, then ON to retry.");
             }
         }
+        requireNetwork(AppConfig.read(context).destination.getAddress());
         prefs.edit().putString("engine_snapshot", snapshot).apply();
+    }
+
+    private void requireNetwork(java.net.InetAddress destination) throws AudioController.NetworkUnavailableException {
+        if (!networkAvailable.test(destination)) {
+            throw new AudioController.NetworkUnavailableException("No network route to the VBAN receiver");
+        }
     }
 }

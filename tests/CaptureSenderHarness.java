@@ -71,5 +71,33 @@ public final class CaptureSenderHarness {
                     + " releases=" + AudioRecord.releaseCount);
         }
         System.out.println("CAPTURE_SENDER_TELEMETRY_PASS");
+        networkFailureReleasesCapture();
+    }
+
+    private static void networkFailureReleasesCapture() throws Exception {
+        int[] errors = {android.system.OsConstants.ENETUNREACH,
+                android.system.OsConstants.EHOSTUNREACH, android.system.OsConstants.ENETDOWN,
+                android.system.OsConstants.EACCES};
+        for (int i = 0; i < errors.length * 2; i++) {
+            int errno = errors[i % errors.length];
+            AudioRecord.script(new int[] {8}, new byte[][] {new byte[8]});
+            java.io.IOException failure = i < errors.length
+                    ? new java.net.SocketException("send failed")
+                    : new java.io.IOException(android.system.Os.strerror(errno));
+            if (i < errors.length) failure.initCause(new android.system.ErrnoException("send", errno));
+            try {
+                CaptureSender.runContinuous(new OutputConfig(new String[] {"127.0.0.1", "6980", "NET", "2"}),
+                        () -> true, null, new CaptureProgress(), null, false,
+                        (channel, packet) -> { throw failure; });
+                throw new AssertionError("Network error was hidden");
+            } catch (java.io.IOException expected) {
+                boolean retryable = errno != android.system.OsConstants.EACCES;
+                if ((expected instanceof java.net.NoRouteToHostException) != retryable
+                        || (!retryable && expected != failure) || AudioRecord.releaseCount != 1) {
+                    throw new AssertionError("Wrong failure classification or unreleased capture: " + errno, expected);
+                }
+            }
+        }
+        System.out.println("CAPTURE_NETWORK_FAILURE_PASS");
     }
 }

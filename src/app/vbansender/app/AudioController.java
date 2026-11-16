@@ -7,6 +7,10 @@ import java.util.function.BooleanSupplier;
 
 /** Serializes requests to start and stop the audio backend. */
 public final class AudioController implements AutoCloseable {
+    /** Only receiver-route failures opt into automatic recovery; ADB I/O stays fatal. */
+    public static final class NetworkUnavailableException extends Exception {
+        public NetworkUnavailableException(String message) { super(message); }
+    }
     public interface Backend {
         void start(BooleanSupplier stillEnabled) throws Exception;
         void stop() throws Exception;
@@ -30,14 +34,18 @@ public final class AudioController implements AutoCloseable {
     public interface Listener {
         void onState(State state);
         void onError(Exception error);
+        default void onNetworkWait(long retryMillis) { }
     }
 
-    public enum State { STARTING, STOPPING, ON, OFF }
+    public enum State { STARTING, STOPPING, ON, OFF, WAITING_NETWORK }
 
     private final Object lock = new Object();
     private final Backend backend;
     private final Listener listener;
     private final Requests requests;
+    private final java.util.function.LongSupplier nanoTime;
+    private static final long INITIAL_NETWORK_RETRY_MILLIS = 10000;
+    private static final long STABLE_NETWORK_NANOS = 30000000000L;
     private String observedOffToken = "";
     private boolean durablePending;
     private boolean cleanupIncomplete;
@@ -87,18 +95,40 @@ public final class AudioController implements AutoCloseable {
     private long failedStartVersion = -1;
     private long failedStopFence = -1;
     private State state;
+    private long networkRetryMillis = INITIAL_NETWORK_RETRY_MILLIS;
+    private boolean healthWindowActive;
+    private long healthySinceNanos;
+
+    /** A timer or changed route may retry only a confirmed network wait. */
+    public void retryNetwork() {
+        synchronized (lock) {
+            if (closed || state != State.WAITING_NETWORK) return;
+            refreshLocked();
+            if (!desired) return;
+            requestVersion++;
+            scheduleIfNeededLocked();
+        }
+    }
 
     public AudioController(Backend backend, Listener listener) {
         this(backend, listener, null);
     }
 
     public AudioController(Backend backend, Listener listener, Requests requests) {
+        this(backend, listener, requests, new java.util.function.LongSupplier() {
+            @Override public long getAsLong() { return System.nanoTime(); }
+        });
+    }
+
+    AudioController(Backend backend, Listener listener, Requests requests,
+            java.util.function.LongSupplier nanoTime) {
         if (backend == null || listener == null) {
             throw new NullPointerException("backend and listener are required");
         }
         this.backend = backend;
         this.listener = listener;
         this.requests = requests;
+        this.nanoTime = nanoTime;
         if (requests != null) {
             Request initial = requests.read();
             initialCleanup = initial.cleanupPending;
@@ -137,8 +167,11 @@ public final class AudioController implements AutoCloseable {
     /** Checks the detached engine on the same worker as Start and Stop. */
     public void check() {
         synchronized (lock) {
+            // A network event/timer during cleanup must not interpret the
+            // backend's internal cleanup token as a newly accepted user OFF.
+            if (closed || state != State.ON) return;
             refreshLocked();
-            if (closed || !desired || state != State.ON) return;
+            if (!desired) return;
             checkRequested = true;
             scheduleIfNeededLocked();
         }
@@ -281,18 +314,36 @@ public final class AudioController implements AutoCloseable {
     private void checkBackend(long version) {
         Exception failure = null;
         try { backend.check(); } catch (Exception error) { failure = error; }
+        long fence;
         synchronized (lock) {
             refreshLocked();
             if (closed || !desired || durablePending || requestVersion != version) return;
-            if (failure != null) {
+            fence = offFence;
+            if (failure != null) healthWindowActive = false;
+            if (failure instanceof NetworkUnavailableException) {
+                // Cleanup still runs on the serialized worker before any retry.
+            } else if (failure != null) {
                 healthFailed = true;
                 notifyError(failure);
-            } else if (healthFailed) {
-                healthFailed = false;
-                try { listener.onState(State.ON); }
-                catch (RuntimeException error) { notifyError(error); }
+                return;
+            } else {
+                long now = nanoTime.getAsLong();
+                if (!healthWindowActive) {
+                    healthWindowActive = true;
+                    healthySinceNanos = now;
+                }
+                if (now - healthySinceNanos >= STABLE_NETWORK_NANOS) {
+                    networkRetryMillis = INITIAL_NETWORK_RETRY_MILLIS;
+                }
+                if (healthFailed) {
+                    healthFailed = false;
+                    try { listener.onState(State.ON); }
+                    catch (RuntimeException error) { notifyError(error); }
+                }
+                return;
             }
         }
+        if (stopEngine(fence)) waitForNetwork(fence);
     }
 
     private StartResult start(final long startFence) {
@@ -321,7 +372,7 @@ public final class AudioController implements AutoCloseable {
         }
 
         transition(State.STOPPING);
-        if (startError != null) {
+        if (startError != null && !(startError instanceof NetworkUnavailableException)) {
             notifyError(startError);
         }
         long stopFence;
@@ -332,13 +383,30 @@ public final class AudioController implements AutoCloseable {
             return StartResult.STOP_FAILED;
         }
 
+        if (startError instanceof NetworkUnavailableException) waitForNetwork(startFence);
+
         synchronized (lock) {
             boolean laterOnAfterOff = desired && !closed && offFence != startFence;
-            if (startError != null && !laterOnAfterOff) {
+            if (startError != null && !laterOnAfterOff
+                    && !(startError instanceof NetworkUnavailableException)) {
                 // Surface one failed attempt without spinning; another explicit request retries.
                 failedStartVersion = requestVersion;
             }
             return laterOnAfterOff ? StartResult.CANCELLED : StartResult.FAILED;
+        }
+    }
+
+    private void waitForNetwork(long fence) {
+        synchronized (lock) {
+            refreshLocked();
+            if (closed || !desired || durablePending || cleanupIncomplete
+                    || offFence != fence || engineMayBeActive) return;
+            failedStartVersion = requestVersion;
+            transition(State.WAITING_NETWORK);
+            long delay = networkRetryMillis;
+            networkRetryMillis = Math.min(300000, networkRetryMillis * 2);
+            try { listener.onNetworkWait(delay); }
+            catch (RuntimeException error) { notifyError(error); }
         }
     }
 
@@ -395,6 +463,8 @@ public final class AudioController implements AutoCloseable {
             changed = state != State.ON;
             state = State.ON;
             healthFailed = false;
+            healthWindowActive = true;
+            healthySinceNanos = nanoTime.getAsLong();
             backendStateKnown = true;
         }
         if (changed) {
@@ -412,6 +482,8 @@ public final class AudioController implements AutoCloseable {
         synchronized (lock) {
             changed = state != next;
             state = next;
+            if (next != State.ON) healthWindowActive = false;
+            if (next == State.OFF && !desired) networkRetryMillis = INITIAL_NETWORK_RETRY_MILLIS;
         }
         if (changed) {
             try {

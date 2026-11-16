@@ -90,7 +90,28 @@ Startup validates the run marker immediately.
 OFF confirms own-process exit and restores the saved surround
 setting. One monotonic 30-second budget covers Stop's ADB commands and polling;
 each command is limited by the remaining budget. Timeout preserves cleanup state. Boot and reopening the UI also reconcile interrupted cleanup.
-Failures remain visible without a restart loop.
+Unexpected failures remain visible without a restart loop.
+
+Before starting, the service checks for an IPv4 route to the saved receiver using
+`ConnectivityManager`. It listens for default-network/link-property changes with
+`ACCESS_NETWORK_STATE`; it does not require Internet validation. Missing routes and
+UDP network-unreachable/down errors enter `WAITING_NETWORK` after confirmed cleanup.
+Retries wait 10, 20, 40, 80, 160, then 300 seconds. Each retry reads current
+network state, so polling can recover even without a callback. A route-change event
+wakes a waiting retry immediately. A successful health check after at least 30 seconds
+of uninterrupted healthy operation resets backoff; startup alone does not reset it.
+Any failed health check interrupts that window.
+OFF cancels retries and still requires normal cleanup. Cleanup failures block retries.
+The UI and notification show the network wait and retry interval. Other errors,
+including ADB authorization, capture permission and stale heartbeats, remain fatal.
+
+The engine publishes terminal `NETWORK_UNAVAILABLE` separately from `ERROR`.
+UDP errors use `NoRouteToHostException` or Android errno `ENETUNREACH`, `EHOSTUNREACH`,
+`ENETDOWN`. Android 12 NIO can discard errno in native `IOUtil`/`Net`; for that path
+only, plain UDP I/O/socket/connect exceptions without a cause are compared with the
+exact platform `Os.strerror` messages for those three codes. No substring matching
+or generic I/O retry is used. See Android 12 [IOUtil.c](https://android.googlesource.com/platform/libcore/+/refs/heads/android12-release/ojluni/src/main/native/IOUtil.c)
+and [Net.c](https://android.googlesource.com/platform/libcore/+/refs/heads/android12-release/ojluni/src/main/native/Net.c).
 
 One routing loop supports finite probes and continuous operation. Packet pacing
 follows the source clock within a bounded 1024-frame read. Late packets retain
@@ -109,8 +130,9 @@ one-second delay, with at most three retries when failures recur within ten seco
 Persistent recorder failures and other capture errors remain fatal. See the
 [AudioRecord API](https://developer.android.com/reference/android/media/AudioRecord#ERROR_DEAD_OBJECT).
 The service checks engine status every 15 seconds on the Start/Stop worker and
-when the app is reopened. Checks report failures without restarting a failed engine;
-a v2 engine heartbeat at least 45 seconds old is reported as an error even if its
+when the app is reopened and the default network changes. Checks report unexpected
+failures without restarting a failed engine; network loss uses the retry policy above.
+A v2 engine heartbeat at least 45 seconds old is reported as an error even if its
 process is still alive. Silence and IDLE do not count as failures. A successful
 check clears a temporary status-read error. Legacy snapshots have no heartbeat age.
 The UI saves the requested choice; controller callbacks publish progress and errors.

@@ -120,7 +120,7 @@ def main():
                    + [str(ROOT / "src/app/vbansender" / p) for p in actual]
                    + [str(ROOT / "tests" / p) for p in ("MainActivityRetryHarness.java", "MemoryPrefs.java")], check=True)
     for scenario in ("failed_off_cleanup", "failed_off_unconfigured", "retry_displayed_after_cleanup",
-                     "ordinary_off", "failed_start", "off_error_without_pending"):
+                     "ordinary_off", "failed_start", "off_error_without_pending", "network_wait"):
         subprocess.run(["java", "-cp", str(classes), "app.vbansender.app.MainActivityRetryHarness", scenario],
                        check=True, timeout=10)
     print("PASS: failed OFF retry, ordinary OFF→ON, failed-start OFF recovery, and state-specific error guidance")

@@ -114,6 +114,9 @@ public final class MainActivity extends Activity {
         if (!error.isEmpty()) {
             status.setText("Error: " + error + (retryOff ? "\nRetry OFF to finish cleanup."
                     : enabled ? "\nTurn OFF, then ON to retry." : "\nTurn ON to retry."));
+        } else if (enabled && "WAITING_NETWORK".equals(state)) {
+            status.setText("Waiting for network — automatic retry in "
+                    + prefs.getString("network_retry_seconds", "10") + " s");
         } else if ("STARTING".equals(state) || "STOPPING".equals(state)) {
             status.setText("STARTING".equals(state) ? "Starting…" : "Stopping…");
         } else if (!AppConfig.configured(this)) {

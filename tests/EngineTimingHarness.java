@@ -30,6 +30,7 @@ public final class EngineTimingHarness {
             boundedPolling(directory);
             cancellationIsFinal(directory, false);
             cancellationIsFinal(directory, true);
+            networkStatusIsTyped(directory);
             System.out.println("ENGINE_TIMING_PASS");
         } else if ("hold-lock".equals(args[0])) {
             try (RandomAccessFile file = new RandomAccessFile(new File(directory, "engine.lock"), "rw");
@@ -43,6 +44,19 @@ public final class EngineTimingHarness {
         } else {
             throw new IllegalArgumentException("Expected check or benchmark");
         }
+    }
+
+    private static void networkStatusIsTyped(File directory) throws Exception {
+        EngineStatus status = new EngineStatus(directory,
+                "0123456789abcdef0123456789abcdef", 2000, 1234);
+        File state = new File(directory, "engine-state.txt");
+        status.updateError(new java.net.NoRouteToHostException("Network unreachable"));
+        String network = new String(Files.readAllBytes(state.toPath()), StandardCharsets.UTF_8);
+        require(network.contains(" state=NETWORK_UNAVAILABLE ")
+                && network.endsWith("message=Network unreachable\n"), "Network error lost its IPC classification");
+        status.updateError(new IOException("Permission denied"));
+        String fatal = new String(Files.readAllBytes(state.toPath()), StandardCharsets.UTF_8);
+        require(fatal.contains(" state=ERROR "), "Unexpected I/O error became recoverable");
     }
 
     private static void preparationRespectsOtherOwner(File directory) throws Exception {
