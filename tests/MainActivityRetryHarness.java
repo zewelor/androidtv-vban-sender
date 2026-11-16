@@ -22,7 +22,8 @@ public final class MainActivityRetryHarness {
             }
         } else if (scenario.equals("network_wait")) {
             AppConfig.save(prefs.edit().putBoolean("enabled", true)
-                    .putString("controller_state", "WAITING_NETWORK").putString("network_retry_seconds", "300"));
+                    .putString("controller_state", "WAITING_NETWORK").putString("network_retry_seconds", "300")
+                    .putString("network_retry_at_uptime_ms", Long.toString(android.os.SystemClock.now + 300000)));
         } else if (scenario.equals("ordinary_off")) {
             AppConfig.save(prefs.edit().putBoolean("enabled", false));
         } else if (scenario.equals("failed_start")) {
@@ -62,6 +63,20 @@ public final class MainActivityRetryHarness {
         } else if (scenario.equals("network_wait")) {
             require("ON".contentEquals(button.getText()) && status.getText().toString().contains("Waiting for network")
                     && status.getText().toString().contains("300 s"), "Waiting state or retry interval missing");
+            activity.onPause();
+            android.os.SystemClock.now += 1500;
+            activity.onResume();
+            require(status.getText().toString().contains("299 s"), "Reopening UI reset the countdown: " + status.getText());
+            android.os.SystemClock.now += 1000;
+            android.os.Handler.fireDelay(1000);
+            Runnable tick;
+            while ((tick = android.os.Handler.queue.poll()) != null) tick.run();
+            require(status.getText().toString().contains("298 s"), "Visible countdown did not advance");
+            activity.onPause();
+            require(android.os.Handler.delayed.isEmpty(), "Paused activity retained countdown ticks");
+            android.os.SystemClock.now += 400000;
+            activity.onResume();
+            require(status.getText().toString().contains("0 s"), "Expired countdown became negative");
             button.performClick();
             require(Boolean.FALSE.equals(VbanService.lastEnabled), "Waiting network did not allow OFF");
         } else if (scenario.equals("ordinary_off")) {

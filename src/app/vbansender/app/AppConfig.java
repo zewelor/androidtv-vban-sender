@@ -84,4 +84,11 @@ final class AppConfig {
             throw new IllegalStateException("Could not save VBAN settings");
         }
     }
+
+    static long networkRetrySeconds(SharedPreferences prefs, long uptimeMillis) {
+        String deadline = prefs.getString("network_retry_at_uptime_ms", "");
+        if (deadline.isEmpty()) return Long.parseLong(prefs.getString("network_retry_seconds", "10"));
+        long remaining = Long.parseLong(deadline) - uptimeMillis;
+        return remaining <= 0 ? 0 : (remaining + 999) / 1000;
+    }
 }

@@ -11,6 +11,7 @@ import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 import java.util.concurrent.CancellationException;
 
@@ -23,6 +24,9 @@ public final class VbanService extends Service {
     private volatile boolean destroyed;
     private final Runnable networkRetry = new Runnable() {
         @Override public void run() { controller.retryNetwork(); }
+    };
+    private final Runnable countdown = new Runnable() {
+        @Override public void run() { publishCurrentState(); }
     };
     private final Runnable healthCheck = new Runnable() {
         @Override
@@ -65,6 +69,7 @@ public final class VbanService extends Service {
                 Log.i("VBAN", "Controller " + state);
                 SharedPreferences prefs = AppConfig.prefs(VbanService.this);
                 SharedPreferences.Editor update = prefs.edit().putString("controller_state", state.name());
+                if (state != AudioController.State.WAITING_NETWORK) update.remove("network_retry_at_uptime_ms");
                 if (state == AudioController.State.ON || state == AudioController.State.WAITING_NETWORK
                         || state == AudioController.State.OFF
                         && !prefs.getBoolean("enabled", false)) {
@@ -88,8 +93,12 @@ public final class VbanService extends Service {
                     @Override public void run() {
                         if (destroyed) return;
                         main.removeCallbacks(networkRetry);
-                        if (AppConfig.prefs(VbanService.this).getBoolean("enabled", false)) {
-                            main.postDelayed(networkRetry, retryMillis);
+                        SharedPreferences prefs = AppConfig.prefs(VbanService.this);
+                        if (prefs.getBoolean("enabled", false)
+                                && "WAITING_NETWORK".equals(prefs.getString("controller_state", ""))) {
+                            long retryAt = SystemClock.uptimeMillis() + retryMillis;
+                            AppConfig.save(prefs.edit().putString("network_retry_at_uptime_ms", Long.toString(retryAt)));
+                            main.postAtTime(networkRetry, retryAt);
                         }
                         publishCurrentState();
                     }
@@ -122,6 +131,7 @@ public final class VbanService extends Service {
     /** Main-thread callbacks use current cleanup proof, never a historical OFF event. */
     private void publishCurrentState() {
         if (destroyed) return;
+        main.removeCallbacks(countdown);
         SharedPreferences prefs = AppConfig.prefs(this);
         boolean off = !prefs.getBoolean("enabled", false) && controller.isOff();
         if (off && prefs.contains("last_error")) {
@@ -129,11 +139,13 @@ public final class VbanService extends Service {
         }
         String state = prefs.getString("controller_state", "OFF");
         boolean failed = !prefs.getString("last_error", "").isEmpty();
+        boolean waiting = prefs.getBoolean("enabled", false) && "WAITING_NETWORK".equals(state) && !failed;
         getSystemService(NotificationManager.class).notify(2,
                 notification(failed ? "Error — open VBAN for details"
-                        : "WAITING_NETWORK".equals(state) ? "Waiting for network — retry in "
-                                + prefs.getString("network_retry_seconds", "10") + " s"
+                        : waiting ? "Waiting for network — retry in "
+                                + AppConfig.networkRetrySeconds(prefs, SystemClock.uptimeMillis()) + " s"
                         : "ON".equals(state) ? "Automatic audio routing enabled" : state));
+        if (waiting) main.postDelayed(countdown, 1000);
         if (off && stopSelfResult(latestStart)) {
             stopForeground(STOP_FOREGROUND_REMOVE);
         }

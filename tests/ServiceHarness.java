@@ -75,6 +75,18 @@ public final class ServiceHarness {
         require(android.app.NotificationManager.text.contains("Waiting for network")
                 && prefs.getString("last_error", "").isEmpty() && prefs.getBoolean("enabled", false),
                 "missing network must keep requested ON and show a recoverable wait");
+        String deadline = prefs.getString("network_retry_at_uptime_ms", "");
+        require(!deadline.isEmpty(), "retry has no shared countdown deadline");
+        android.os.SystemClock.now += 1500;
+        Handler.fireDelay(1000); drain();
+        require(android.app.NotificationManager.text.endsWith("9 s")
+                && deadline.equals(prefs.getString("network_retry_at_uptime_ms", ""))
+                && backend.starts.get() == 1, "countdown tick changed retry timing or did not update notification");
+        ui.startForegroundService(new Intent(ui, VbanService.class)); deliver(); // Reopen waiting UI.
+        Thread.sleep(100);
+        require(backend.starts.get() == 1 && deadline.equals(prefs.getString("network_retry_at_uptime_ms", "")),
+                "reopening the waiting screen restarted its retry countdown");
+        android.os.SystemClock.now = Long.parseLong(deadline);
         Handler.fireDelay(10000); drain();
         await(() -> "20".equals(prefs.getString("network_retry_seconds", "")), "timer retry");
         await(() -> { drain(); return Handler.delayed.containsValue(20000L); }, "second retry timer publication");
@@ -83,6 +95,8 @@ public final class ServiceHarness {
         await(() -> "ON".equals(prefs.getString("controller_state", "")), "network event recovery");
         await(() -> { drain(); return !Handler.delayed.containsValue(20000L); }, "retry cancellation after recovery");
         require(!Handler.delayed.containsValue(20000L), "successful recovery retained a stale retry timer");
+        require(!Handler.delayed.containsValue(1000L) && !prefs.contains("network_retry_at_uptime_ms"),
+                "successful recovery retained countdown ticks or deadline");
         backend.networkAvailable = false;
         controller().check();
         await(() -> "WAITING_NETWORK".equals(prefs.getString("controller_state", "")), "running network loss");

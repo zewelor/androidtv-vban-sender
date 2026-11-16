@@ -142,6 +142,9 @@ public final class AudioController implements AutoCloseable {
         synchronized (lock) {
             if (closed) throw new IllegalStateException("AudioController is closed");
             refreshLocked();
+            // Reopening the UI preserves an existing wait; network events and
+            // its timer have a separate wakeup. A persisted OFF still wins.
+            if (state == State.WAITING_NETWORK && desired && !durablePending && !cleanupIncomplete) return;
             requestVersion++;
             checkRequested = desired && state == State.ON;
             scheduleIfNeededLocked();

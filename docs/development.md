@@ -102,7 +102,9 @@ wakes a waiting retry immediately. A successful health check after at least 30 s
 of uninterrupted healthy operation resets backoff; startup alone does not reset it.
 Any failed health check interrupts that window.
 OFF cancels retries and still requires normal cleanup. Cleanup failures block retries.
-The UI and notification show the network wait and retry interval. Other errors,
+The UI and notification show seconds remaining until the scheduled retry, refreshed
+once per second while waiting. The deadline uses the same uptime clock as the Handler
+timer, so reopening the screen does not restart the countdown. Other errors,
 including ADB authorization, capture permission and stale heartbeats, remain fatal.
 
 The engine publishes terminal `NETWORK_UNAVAILABLE` separately from `ERROR`.

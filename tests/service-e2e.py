@@ -45,6 +45,7 @@ public class Intent {
 """,
     "android/os/Looper.java": "package android.os; public class Looper { public static Looper getMainLooper(){return new Looper();} }",
     "android/os/IBinder.java": "package android.os; public interface IBinder { }",
+    "android/os/SystemClock.java": "package android.os; public class SystemClock { public static long now=100000; public static long uptimeMillis(){return now;} }",
     "android/os/Handler.java": """
 package android.os;
 import java.util.concurrent.*;
@@ -54,6 +55,7 @@ public class Handler {
  public Handler(Looper l) { }
  public boolean post(Runnable r) { queue.add(r); return true; }
  public boolean postDelayed(Runnable r,long ms) { delayed.put(r,ms); return true; }
+ public boolean postAtTime(Runnable r,long when) {return postDelayed(r,Math.max(0,when-SystemClock.uptimeMillis()));}
  public void removeCallbacks(Runnable r) { queue.remove(r); delayed.remove(r); }
  public void removeCallbacksAndMessages(Object token) { queue.clear(); delayed.clear(); }
  public static void fireDelay(long ms) {

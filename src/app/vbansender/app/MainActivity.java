@@ -8,6 +8,9 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
@@ -21,6 +24,11 @@ public final class MainActivity extends Activity {
     private SharedPreferences prefs;
     private boolean renderedEnabled;
     private boolean renderedRetryOff;
+    private boolean resumed;
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private final Runnable countdown = new Runnable() {
+        @Override public void run() { render(); }
+    };
     private final SharedPreferences.OnSharedPreferenceChangeListener changes =
             new SharedPreferences.OnSharedPreferenceChangeListener() {
         @Override
@@ -101,6 +109,7 @@ public final class MainActivity extends Activity {
     }
 
     private void render() {
+        main.removeCallbacks(countdown);
         boolean enabled = prefs.getBoolean("enabled", false);
         boolean retryOff = retryOff();
         renderedEnabled = enabled;
@@ -116,7 +125,8 @@ public final class MainActivity extends Activity {
                     : enabled ? "\nTurn OFF, then ON to retry." : "\nTurn ON to retry."));
         } else if (enabled && "WAITING_NETWORK".equals(state)) {
             status.setText("Waiting for network — automatic retry in "
-                    + prefs.getString("network_retry_seconds", "10") + " s");
+                    + AppConfig.networkRetrySeconds(prefs, SystemClock.uptimeMillis()) + " s");
+            if (resumed) main.postDelayed(countdown, 1000);
         } else if ("STARTING".equals(state) || "STOPPING".equals(state)) {
             status.setText("STARTING".equals(state) ? "Starting…" : "Stopping…");
         } else if (!AppConfig.configured(this)) {
@@ -154,6 +164,7 @@ public final class MainActivity extends Activity {
     @Override
     public void onResume() {
         super.onResume();
+        resumed = true;
         prefs.registerOnSharedPreferenceChangeListener(changes);
         if (AppConfig.needsReconcile(this)) {
             try {
@@ -167,6 +178,8 @@ public final class MainActivity extends Activity {
 
     @Override
     public void onPause() {
+        resumed = false;
+        main.removeCallbacks(countdown);
         prefs.unregisterOnSharedPreferenceChangeListener(changes);
         super.onPause();
     }
